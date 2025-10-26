@@ -9,18 +9,25 @@ import 'screens/book_groups_screen.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // optional: preload prefs to catch any corrupted data safely
+  // Load user info and determine if it's first time
+  Map<String, dynamic>? userInfo;
   try {
-    await SharedPrefsService.loadUserInfo();
+    userInfo = await SharedPrefsService.loadUserInfo();
   } catch (e) {
     print('Error loading SharedPrefs: $e');
+    userInfo = null; // Treat as first time on error
   }
 
-  runApp(const MyApp());
+  final bool isFirstTime =
+      userInfo?['name'] == null || userInfo!['name'].isEmpty;
+
+  runApp(MyApp(isFirstTime: isFirstTime));
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  final bool isFirstTime;
+
+  const MyApp({super.key, required this.isFirstTime});
 
   @override
   Widget build(BuildContext context) {
@@ -28,7 +35,7 @@ class MyApp extends StatelessWidget {
       title: 'Bible Reading Plan',
       theme: ThemeData(primarySwatch: Colors.blue),
       debugShowCheckedModeBanner: false,
-      initialRoute: '/',
+      initialRoute: isFirstTime ? '/onboarding' : '/',
       routes: {
         '/': (context) => const HomeScreen(),
         '/daily': (context) => const DailyScreen(),
