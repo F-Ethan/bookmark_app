@@ -13,13 +13,14 @@ class OnboardingScreen extends StatefulWidget {
 class _OnboardingScreenState extends State<OnboardingScreen> {
   final _nameController = TextEditingController();
   int _startDay = 1;
-  DateTime _startDate = DateTime.now();
+  DateTime _startDate =
+      DateTime.now(); // Fixed to current date—no changes needed
 
   Future<void> _saveAndNavigate() async {
     await SharedPrefsService.saveUserInfo(
       name: _nameController.text,
       startDay: _startDay,
-      startDate: _startDate,
+      startDate: _startDate, // Will always be today
     );
     if (!mounted) return;
     Navigator.pushReplacement(
@@ -62,30 +63,17 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               ),
             ),
             const SizedBox(height: 10),
-            ListTile(
-              title: const Text('Start Date'),
-              subtitle: Text(DateFormat('MMM d, yyyy').format(_startDate)),
-              trailing: const Icon(Icons.calendar_today),
-              onTap: () async {
-                final date = await showDatePicker(
-                  context: context,
-                  initialDate: _startDate,
-                  firstDate: DateTime(2020),
-                  lastDate: DateTime(2030),
-                );
-                if (date != null) {
-                  setState(() {
-                    _startDate = date;
-                  });
-                }
-              },
+            // Static display for the fixed start date (no picker)
+            Text(
+              'Start Date: ${DateFormat('MMM d, yyyy').format(_startDate)}',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
             ),
             const SizedBox(height: 20),
             ElevatedButton(
               onPressed: _nameController.text.isNotEmpty && _startDay > 0
                   ? _saveAndNavigate
                   : null,
-              child: const Text('Start My Plan'),
+              child: const Text('Start Reading'),
             ),
           ],
         ),
