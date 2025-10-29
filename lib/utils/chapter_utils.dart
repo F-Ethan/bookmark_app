@@ -1,4 +1,5 @@
 import '../data/bible_sections.dart';
+import '../models/book_group.dart';
 
 /// Function to get the chapter for a given group
 String? _getChapterForGroup(int day, BibleGroup group) {
@@ -24,17 +25,16 @@ String? _getChapterForGroup(int day, BibleGroup group) {
   return null;
 }
 
-/// Get all chapters for a given day (one per group)
-List<String> getChaptersForDay(int day) {
+List<String> getChaptersForDay(int day, List<BibleGroup> groups) {
   final List<String> chapters = [];
-
-  for (final group in defaultBookGroups) {
+  final activeGroups = groups.isNotEmpty
+      ? groups
+      : defaultBookGroups; // Fallback
+  for (final group in activeGroups) {
+    // Dynamic
     final chapter = _getChapterForGroup(day, group);
-    if (chapter != null) {
-      chapters.add(chapter);
-    }
+    if (chapter != null) chapters.add(chapter);
   }
-
   return chapters;
 }
 
