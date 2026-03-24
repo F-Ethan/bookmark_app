@@ -1,0 +1,11 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "bookmark_app (dev)",
+      "request": "launch",
+      "type": "dart",
+      "args": ["--dart-define-from-file=dart_defines/dev.json"]
+    }
+  ]
+}

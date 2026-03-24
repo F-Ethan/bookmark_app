@@ -1,32 +1,26 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
-import '../services/shared_prefs_service.dart';
-import '../utils/chapter_utils.dart';
+import '../core/theme/app_theme.dart';
 import '../data/bible_sections.dart';
-import '../models/book_group.dart'; // For BibleGroup
+import '../providers/reading_plan_provider.dart';
+import '../providers/book_groups_provider.dart';
+import '../utils/chapter_utils.dart';
+import 'reader_screen.dart' show ReaderArgs;
 
-class DailyScreen extends StatefulWidget {
+class DailyScreen extends ConsumerStatefulWidget {
   const DailyScreen({super.key});
 
   @override
-  State<DailyScreen> createState() => _DailyScreenState();
+  ConsumerState<DailyScreen> createState() => _DailyScreenState();
 }
 
-class _DailyScreenState extends State<DailyScreen> {
-  String? name;
-  int currentDay = 1;
-  DateTime? startDate;
-  List<String> todaysChapters = [];
-  List<BibleGroup>? activeGroups; // Loaded custom or default groups
+class _DailyScreenState extends ConsumerState<DailyScreen> {
   final PageController _pageController = PageController(viewportFraction: 0.33);
   int _currentPageIndex = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadPrefs();
-  }
+  int? _viewedDay; // null = show currentDay
 
   @override
   void dispose() {
@@ -34,57 +28,13 @@ class _DailyScreenState extends State<DailyScreen> {
     super.dispose();
   }
 
-  Future<void> _loadPrefs() async {
-    final map = await SharedPrefsService.loadUserInfo();
-    final sdString = map['start_date'] as String?;
-
-    // Load custom groups or fallback to defaults
-    final customGroups = await SharedPrefsService.loadGroups();
-    final List<BibleGroup> loadedGroups = customGroups.isNotEmpty
-        ? customGroups
-        : defaultBookGroups;
-
-    setState(() {
-      name = (map['name'] as String?) ?? 'Reader';
-      currentDay = (map['current_day'] as int?) ?? 1;
-      startDate = sdString != null ? DateTime.parse(sdString) : DateTime.now();
-      activeGroups = loadedGroups;
-      todaysChapters = getChaptersForDay(
-        currentDay,
-        loadedGroups,
-      ); // Pass groups to util
-    });
-
-    // Scroll to center current day
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && _pageController.hasClients) {
-        final int minDay = math.max(1, currentDay - 5);
-        final int currentIndex = currentDay - minDay;
-        _pageController.animateToPage(
-          currentIndex,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeInOut,
-        );
-      }
-    });
-  }
-
-  Future<void> _setCurrentDay(int day) async {
+  void _navigateToDay(int day, {required int currentDay}) {
     if (day < 1) return;
-
-    await SharedPrefsService.setCurrentDay(day);
-
-    setState(() {
-      currentDay = day;
-      todaysChapters = getChaptersForDay(
-        currentDay,
-        activeGroups ?? defaultBookGroups,
-      );
-    });
-
-    // Re-center carousel
-    final int minDay = math.max(1, currentDay - 5);
-    final int newIndex = currentDay - minDay;
+    final minDay = math.max(1, currentDay - 5);
+    final maxDay = currentDay + 5;
+    if (day < minDay || day > maxDay) return;
+    setState(() => _viewedDay = day == currentDay ? null : day);
+    final newIndex = day - minDay;
     if (_pageController.hasClients) {
       _pageController.animateToPage(
         newIndex,
@@ -94,233 +44,373 @@ class _DailyScreenState extends State<DailyScreen> {
     }
   }
 
-  // DEFINED: Mark as read (advance one day)
-  Future<void> _markAsRead() async {
-    await _setCurrentDay(currentDay + 1);
+  Future<void> _markAsRead({required int displayDay, required int currentDay}) async {
+    if (displayDay < currentDay) return; // already read
+    await ref.read(readingPlanProvider.notifier).setCurrentDay(displayDay + 1);
+    setState(() => _viewedDay = null); // snap back to new currentDay
   }
 
-  // DEFINED: Go back one day
-  Future<void> _goBackOneDay() async {
-    await _setCurrentDay(currentDay - 1);
-  }
-
-  // DEFINED: Go forward one day (for forward button)
-  Future<void> _goForwardOneDay() async {
-    await _setCurrentDay(currentDay + 1);
-  }
-
-  DateTime get lastReadDate {
-    if (startDate == null) return DateTime.now();
-    if (currentDay <= 1) return startDate!.subtract(const Duration(days: 1));
-    return startDate!.add(Duration(days: currentDay - 2));
-  }
-
-  String get formattedLastDate =>
-      DateFormat('MMM d, yyyy').format(lastReadDate);
-
-  DateTime _getDateForDay(int day) {
-    if (startDate == null) return DateTime.now();
-    return startDate!.add(Duration(days: day - 1));
-  }
+  DateTime _getDateForDay(int day, DateTime startDate) =>
+      startDate.add(Duration(days: day - 1));
 
   @override
   Widget build(BuildContext context) {
-    if (name == null || startDate == null || activeGroups == null) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    }
+    final planAsync = ref.watch(readingPlanProvider);
+    final groupsAsync = ref.watch(bookGroupsProvider);
 
-    final int minDay = math.max(1, currentDay - 5);
-    final int maxDay = currentDay + 5;
-    final int numDays = maxDay - minDay + 1;
+    return planAsync.when(
+      loading: () =>
+          const Scaffold(body: Center(child: CircularProgressIndicator())),
+      error: (e, _) => Scaffold(body: Center(child: Text('Error: $e'))),
+      data: (plan) {
+        if (plan == null) {
+          return const Scaffold(
+              body: Center(child: CircularProgressIndicator()));
+        }
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Daily Reading'),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.pop(context),
-        ),
-      ),
-      body: CustomScrollView(
-        slivers: [
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
-            sliver: SliverToBoxAdapter(
-              child: Text(
-                'Good morning, ${name ?? 'Reader'}!',
-                style: const TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
+        final groups = groupsAsync.valueOrNull ?? defaultBookGroups;
+        final currentDay = plan.currentDay;
+        final startDate = plan.startDate;
+        final int displayDay = _viewedDay ?? currentDay;
+        final todaysChapters = getChaptersForDay(displayDay, groups);
+
+        final int minDay = math.max(1, currentDay - 5);
+        final int maxDay = currentDay + 5;
+        final int numDays = maxDay - minDay + 1;
+
+        // Only auto-scroll to currentDay when not manually navigating
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && _pageController.hasClients && _viewedDay == null) {
+            final targetIndex = currentDay - minDay;
+            if (_pageController.page?.round() != targetIndex) {
+              _pageController.jumpToPage(targetIndex);
+            }
+          }
+        });
+
+        final int lastReadDay = currentDay - 1;
+        final String? lastReadDate = lastReadDay >= 1
+            ? DateFormat('MMM d, yyyy')
+                .format(_getDateForDay(lastReadDay, startDate))
+            : null;
+
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('Daily Reading'),
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back_rounded),
+              onPressed: () => context.go('/'),
             ),
           ),
-          SliverToBoxAdapter(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                SizedBox(
-                  height: 120,
-                  child: PageView.builder(
-                    controller: _pageController,
-                    onPageChanged: (index) =>
-                        setState(() => _currentPageIndex = index),
-                    itemCount: numDays,
-                    itemBuilder: (context, index) {
-                      final int day = minDay + index;
-                      final bool isCurrent = day == currentDay;
-                      final DateTime dayDate = _getDateForDay(day);
-                      final String formattedDate = DateFormat(
-                        'MMM d, yyyy',
-                      ).format(dayDate);
+          body: CustomScrollView(
+            slivers: [
+              // Greeting
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+                sliver: SliverToBoxAdapter(
+                  child: Text(
+                    'Good morning, ${plan.name}!',
+                    style: Theme.of(context)
+                        .textTheme
+                        .headlineSmall
+                        ?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ),
+              const SliverToBoxAdapter(child: SizedBox(height: 24)),
 
+              // Day carousel
+              SliverToBoxAdapter(
+                child: Column(
+                  children: [
+                    SizedBox(
+                      height: 88,
+                      child: PageView.builder(
+                        controller: _pageController,
+                        onPageChanged: (i) =>
+                            setState(() => _currentPageIndex = i),
+                        itemCount: numDays,
+                        itemBuilder: (context, index) {
+                          final int day = minDay + index;
+                          final bool isCurrent = day == displayDay;
+                          final bool isRead = day < currentDay;
+                          final String formattedDate =
+                              DateFormat('MMM d').format(
+                            _getDateForDay(day, startDate),
+                          );
+
+                          return Padding(
+                            padding:
+                                const EdgeInsets.symmetric(horizontal: 6.0),
+                            child: GestureDetector(
+                              onTap: () => _navigateToDay(day, currentDay: currentDay),
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 200),
+                                decoration: BoxDecoration(
+                                  color: isCurrent
+                                      ? AppTheme.primary
+                                      : Theme.of(context)
+                                          .colorScheme
+                                          .surfaceContainerLow,
+                                  border: Border.all(
+                                    color: isCurrent
+                                        ? AppTheme.primary
+                                        : Theme.of(context)
+                                            .colorScheme
+                                            .outlineVariant,
+                                  ),
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Text(
+                                      'Day $day',
+                                      style: TextStyle(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w600,
+                                        color: isCurrent
+                                            ? Colors.white
+                                            : Theme.of(context)
+                                                .colorScheme
+                                                .onSurface,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    if (isRead)
+                                      Icon(
+                                        Icons.check_circle_rounded,
+                                        size: 20,
+                                        color: isCurrent
+                                            ? Colors.white
+                                            : const Color(0xFF22C55E),
+                                      )
+                                    else
+                                      Text(
+                                        formattedDate,
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: isCurrent
+                                              ? Colors.white70
+                                              : AppTheme.textSecondary,
+                                          fontWeight: FontWeight.w400,
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    // Page dots
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: List.generate(numDays, (i) {
+                        final isActive = _currentPageIndex == i;
+                        return AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          margin: const EdgeInsets.symmetric(horizontal: 3),
+                          width: isActive ? 16 : 6,
+                          height: 6,
+                          decoration: BoxDecoration(
+                            color: isActive
+                                ? AppTheme.primary
+                                : Theme.of(context)
+                                    .colorScheme
+                                    .outlineVariant,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                        );
+                      }),
+                    ),
+                  ],
+                ),
+              ),
+
+              // Last read / today labels
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
+                sliver: SliverList(
+                  delegate: SliverChildListDelegate([
+                    if (lastReadDate != null) ...[
+                      Text(
+                        'Last read: Day $lastReadDay • $lastReadDate',
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodySmall
+                            ?.copyWith(color: AppTheme.textSecondary),
+                      ),
+                      const SizedBox(height: 4),
+                    ],
+                    Text(
+                      displayDay == currentDay
+                          ? 'Today — Day $currentDay'
+                          : displayDay < currentDay
+                              ? 'Day $displayDay — Already Read'
+                              : 'Day $displayDay',
+                      style: Theme.of(context)
+                          .textTheme
+                          .titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 12),
+                  ]),
+                ),
+              ),
+
+              // Chapter list
+              SliverPadding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                sliver: SliverList(
+                  delegate: SliverChildBuilderDelegate(
+                    (context, index) {
                       return Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                        child: GestureDetector(
-                          onTap: () => _setCurrentDay(day),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: isCurrent ? Colors.blue : Colors.grey[200],
-                              borderRadius: BorderRadius.circular(8),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withOpacity(0.1),
-                                  blurRadius: 4,
-                                  offset: const Offset(0, 2),
-                                ),
-                              ],
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .surfaceContainerLow,
+                            border: Border.all(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .outlineVariant,
                             ),
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Text(
-                                  'Day $day',
-                                  style: TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold,
-                                    color: isCurrent
-                                        ? Colors.white
-                                        : Colors.black87,
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 36,
+                                height: 36,
+                                decoration: BoxDecoration(
+                                  color: AppTheme.primary
+                                      .withValues(alpha: 0.10),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: const Icon(
+                                  Icons.book_rounded,
+                                  color: AppTheme.primary,
+                                  size: 18,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  todaysChapters[index],
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .bodyLarge
+                                      ?.copyWith(fontWeight: FontWeight.w500),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              TextButton(
+                                onPressed: () => context.push(
+                                  '/reader',
+                                  extra: ReaderArgs(
+                                    dayChapters: todaysChapters,
+                                    initialIndex: index,
+                                    readingDay: displayDay,
                                   ),
                                 ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  formattedDate,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: isCurrent
-                                        ? Colors.white70
-                                        : Colors.grey[600],
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                  textAlign: TextAlign.center,
+                                style: TextButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 12, vertical: 6),
+                                  minimumSize: Size.zero,
+                                  tapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
                                 ),
-                              ],
-                            ),
+                                child: const Text('Read'),
+                              ),
+                            ],
                           ),
                         ),
                       );
                     },
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: List.generate(numDays, (index) {
-                    return Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 2),
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: _currentPageIndex == index
-                            ? Colors.blue
-                            : Colors.grey[300],
-                      ),
-                    );
-                  }),
-                ),
-              ],
-            ),
-          ),
-          SliverPadding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            sliver: SliverList(
-              delegate: SliverChildListDelegate([
-                if (currentDay > 1)
-                  Text(
-                    'Last read: Day ${currentDay - 1} ($formattedLastDate)',
-                    style: const TextStyle(fontSize: 16),
-                  ),
-                Text(
-                  'To read today: Day $currentDay',
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 10),
-              ]),
-            ),
-          ),
-          SliverPadding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            sliver: SliverList(
-              delegate: SliverChildBuilderDelegate(
-                (context, index) => ListTile(
-                  leading: const Icon(Icons.book, color: Colors.blue),
-                  title: Text(
-                    todaysChapters[index],
-                    style: const TextStyle(fontSize: 16),
-                  ),
-                ),
-                childCount: todaysChapters.length,
-              ),
-            ),
-          ),
-          const SliverToBoxAdapter(child: SizedBox(height: 20)),
-        ],
-      ),
-      bottomNavigationBar: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.05),
-              blurRadius: 8,
-              offset: const Offset(0, -2),
-            ),
-          ],
-        ),
-        child: SafeArea(
-          child: Row(
-            children: [
-              IconButton(
-                icon: const Icon(Icons.arrow_back),
-                tooltip: 'Go back one day',
-                onPressed: _goBackOneDay, // Now defined above
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: ElevatedButton(
-                  onPressed: _markAsRead, // Now defined above
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.all(16),
-                  ),
-                  child: const Text(
-                    'Mark as Read',
-                    style: TextStyle(fontSize: 18),
+                    childCount: todaysChapters.length,
                   ),
                 ),
               ),
-              IconButton(
-                icon: const Icon(Icons.arrow_forward),
-                tooltip: 'Go forward one day',
-                onPressed: _goForwardOneDay, // Defined above
-              ),
-              const SizedBox(width: 8),
+              const SliverToBoxAdapter(child: SizedBox(height: 32)),
             ],
           ),
+
+          // Bottom action bar
+          bottomNavigationBar: Container(
+            padding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
+            decoration: BoxDecoration(
+              color: Theme.of(context).scaffoldBackgroundColor,
+              border: Border(
+                top: BorderSide(
+                    color: Theme.of(context).colorScheme.outlineVariant),
+              ),
+            ),
+            child: SafeArea(
+              child: Row(
+                children: [
+                  _CircleIconButton(
+                    icon: Icons.arrow_back_rounded,
+                    tooltip: 'Previous day',
+                    onPressed: () => _navigateToDay(displayDay - 1, currentDay: currentDay),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: FilledButton(
+                      onPressed: displayDay < currentDay
+                          ? null
+                          : () => _markAsRead(displayDay: displayDay, currentDay: currentDay),
+                      child: Text(displayDay < currentDay ? 'Already Read' : 'Mark as Read'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  _CircleIconButton(
+                    icon: Icons.arrow_forward_rounded,
+                    tooltip: 'Next day',
+                    onPressed: () => _navigateToDay(displayDay + 1, currentDay: currentDay),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _CircleIconButton extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onPressed;
+
+  const _CircleIconButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(28),
+        child: Container(
+          width: 48,
+          height: 48,
+          decoration: BoxDecoration(
+            border: Border.all(
+                color: Theme.of(context).colorScheme.outlineVariant),
+            borderRadius: BorderRadius.circular(28),
+          ),
+          child: Icon(icon,
+              color: Theme.of(context).colorScheme.onSurface, size: 20),
         ),
       ),
     );

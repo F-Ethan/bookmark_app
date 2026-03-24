@@ -1,2 +1,5 @@
 #include? "Pods/Target Support Files/Pods-Runner/Pods-Runner.release.xcconfig"
 #include "Generated.xcconfig"
+// Disable Xcode 26 Explicitly Built Modules — causes Swift toolchain
+// discovery failure ("Could not parse Swift versions from:") on this toolchain.
+SWIFT_ENABLE_EXPLICIT_MODULES = NO

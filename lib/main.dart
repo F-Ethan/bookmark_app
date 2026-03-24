@@ -1,18 +1,25 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'services/shared_prefs_service.dart';
-import 'screens/home_screen.dart';
-import 'screens/daily_screen.dart';
-import 'screens/onboarding_screen.dart';
-import 'screens/settings_screen.dart';
-import 'screens/book_groups_screen.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'core/constants/app_constants.dart';
+import 'core/router/router.dart';
+import 'core/theme/app_theme.dart';
+import 'providers/appearance_provider.dart';
+import 'providers/guest_mode_provider.dart';
+import 'providers/translation_provider.dart';
+import 'services/bible_service.dart';
 import 'services/notification_service.dart';
 
 void main() async {
-  // ✅ Initialize Flutter engine before using any async plugins
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Clean up invalid notification time if needed
+  await Supabase.initialize(
+    url: AppConstants.supabaseUrl,
+    anonKey: AppConstants.supabaseAnonKey,
+  );
+
+  // Clean up any invalid notification_time format left from older builds
   final prefs = await SharedPreferences.getInstance();
   final timeString = prefs.getString('notification_time');
   if (timeString != null &&
@@ -21,44 +28,40 @@ void main() async {
     await prefs.remove('notification_time');
   }
 
-  // Initialize notifications
   final notificationService = NotificationService();
   await notificationService.init();
 
-  // Load user info and determine if it's first time
-  Map<String, dynamic>? userInfo;
-  try {
-    userInfo = await SharedPrefsService.loadUserInfo();
-  } catch (e) {
-    print('Error loading SharedPrefs: $e');
-    userInfo = null; // Treat as first time on error
-  }
+  final isGuest = prefs.getBool('guest_mode') ?? false;
+  final translation = prefs.getString(kTranslationKey) ?? kDefaultTranslation;
+  final appearance = await loadAppearanceSettings();
 
-  final bool isFirstTime =
-      userInfo?['name'] == null || userInfo!['name'].isEmpty;
+  // Copy KJV from bundle if needed, then load into memory
+  await BibleService.instance.initialize(translation);
 
-  runApp(MyApp(isFirstTime: isFirstTime));
+  runApp(ProviderScope(
+    overrides: [
+      guestModeProvider.overrideWith((ref) => isGuest),
+      translationProvider.overrideWith(() => TranslationNotifier(initial: translation)),
+      appearanceProvider.overrideWith(() => AppearanceNotifier(initial: appearance)),
+    ],
+    child: const MyApp(),
+  ));
 }
 
-class MyApp extends StatelessWidget {
-  final bool isFirstTime;
-
-  const MyApp({super.key, required this.isFirstTime});
+class MyApp extends ConsumerWidget {
+  const MyApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
+  Widget build(BuildContext context, WidgetRef ref) {
+    final router = ref.watch(routerProvider);
+    final themeMode = ref.watch(appearanceProvider.select((a) => a.themeMode));
+    return MaterialApp.router(
       title: 'Bible Reading Plan',
-      theme: ThemeData(primarySwatch: Colors.blue),
+      theme: AppTheme.light,
+      darkTheme: AppTheme.dark,
+      themeMode: themeMode,
       debugShowCheckedModeBanner: false,
-      initialRoute: isFirstTime ? '/onboarding' : '/',
-      routes: {
-        '/': (context) => const HomeScreen(),
-        '/daily': (context) => const DailyScreen(),
-        '/onboarding': (context) => const OnboardingScreen(),
-        '/settings': (context) => const SettingsScreen(),
-        '/bookgroups': (context) => const BookGroupsScreen(),
-      },
+      routerConfig: router,
     );
   }
 }

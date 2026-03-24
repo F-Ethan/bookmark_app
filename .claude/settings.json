@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(flutter pub get --dart-define-from-file=dart_defines/dev.json)",
+      "Bash(flutter pub get)",
+      "Bash(xcode-select -p)",
+      "Bash(swift --version)",
+      "Bash(xcodebuild -version)",
+      "Bash(flutter --version)",
+      "Bash(swiftc --version)",
+      "Bash(xcrun swiftc --version)",
+      "Bash(pod install)",
+      "Bash(flutter build ios --simulator --dart-define-from-file=dart_defines/dev.json)",
+      "Bash(xcrun --sdk iphonesimulator swiftc --version)",
+      "Bash(flutter clean)",
+      "Bash(xcrun --sdk iphoneos swiftc --version)",
+      "Bash(xcodebuild -workspace /Users/ethanferrier/projects/flutter/bookmark_app/ios/Runner.xcworkspace -scheme Runner -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 15 Pro Max' -allowProvisioningUpdates)",
+      "Bash(xcodebuild -workspace /Users/ethanferrier/projects/flutter/bookmark_app/ios/Runner.xcworkspace -scheme Runner -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 15 Pro Max')",
+      "Bash(flutter run --dart-define-from-file=dart_defines/dev.json -v)",
+      "Bash(xcrun simctl list devices booted)",
+      "Bash(xcodebuild -workspace /Users/ethanferrier/projects/flutter/bookmark_app/ios/Runner.xcworkspace -scheme Runner -sdk iphonesimulator -configuration Debug -destination 'id=DF5942F1-5C54-4E36-AADB-66DF45E58F6D' ONLY_ACTIVE_ARCH=YES COMPILER_INDEX_STORE_ENABLE=NO BUILD_DIR=/Users/ethanferrier/projects/flutter/bookmark_app/build/ios)",
+      "Bash(flutter build ios --simulator --dart-define-from-file=dart_defines/dev.json -v)",
+      "Bash(xcrun simctl:*)",
+      "Bash(python3 -c \":*)"
+    ],
+    "additionalDirectories": [
+      "/Users/ethanferrier/projects/flutter/bookmark_app"
+    ]
+  }
+}
