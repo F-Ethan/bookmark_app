@@ -7,9 +7,7 @@ const kTranslationKey = 'bible_translation';
 
 const translationLabels = {
   'kjv': 'KJV — King James Version',
-  'web': 'WEB — World English Bible',
-  'asv': 'ASV — American Standard Version',
-  'ylt': "YLT — Young's Literal Translation",
+  'bbe': 'BBE — Bible in Basic English',
 };
 
 class TranslationNotifier extends Notifier<String> {
@@ -22,13 +20,27 @@ class TranslationNotifier extends Notifier<String> {
   String build() => _initial;
 
   /// Switch to a translation. Downloads it first if not already on device.
+  /// On any failure, reverts to KJV and cleans up the partial download.
   Future<void> setTranslation(String translation) async {
     if (state == translation) return;
-    state = translation;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(kTranslationKey, translation);
-    // initialize() is a no-op if already loaded; downloads+loads if not
-    await BibleService.instance.initialize(translation);
+    try {
+      if (!await BibleService.instance.isTranslationDownloaded(translation)) {
+        await BibleService.instance.downloadTranslation(translation);
+      }
+      await BibleService.instance.initialize(translation);
+      state = translation;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(kTranslationKey, translation);
+    } catch (e) {
+      // Clean up any partial download so it won't be mistaken for complete
+      await BibleService.instance.deleteTranslation(translation);
+      // Revert to KJV
+      await BibleService.instance.initialize(kDefaultTranslation);
+      state = kDefaultTranslation;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(kTranslationKey, kDefaultTranslation);
+      rethrow;
+    }
   }
 
   /// Delete a downloaded translation to free up space.

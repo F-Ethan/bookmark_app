@@ -23,10 +23,12 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   String? _error;
   String? _nameError;
 
+  String _preset = 'original'; // 'original' | 'ordered'
+
   @override
   void initState() {
     super.initState();
-    _groups = List.from(defaultBookGroups);
+    _groups = List.from(hornerBookGroups);
   }
 
   static const int _totalPages = 3;
@@ -107,6 +109,13 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                   ),
                 1 => _BookGroupsPage(
                     groups: _groups,
+                    preset: _preset,
+                    onPresetChanged: (p) => setState(() {
+                      _preset = p;
+                      _groups = List.from(p == 'original'
+                          ? hornerBookGroups
+                          : orderedBookGroups);
+                    }),
                     onGroupsChanged: (updated) =>
                         setState(() => _groups = updated),
                     onNext: _nextPage,
@@ -241,12 +250,16 @@ class _WelcomePage extends StatelessWidget {
 
 class _BookGroupsPage extends StatelessWidget {
   final List<BibleGroup> groups;
+  final String preset;
+  final ValueChanged<String> onPresetChanged;
   final ValueChanged<List<BibleGroup>> onGroupsChanged;
   final VoidCallback onNext;
   final VoidCallback onBack;
 
   const _BookGroupsPage({
     required this.groups,
+    required this.preset,
+    required this.onPresetChanged,
     required this.onGroupsChanged,
     required this.onNext,
     required this.onBack,
@@ -361,6 +374,24 @@ class _BookGroupsPage extends StatelessWidget {
                     ?.copyWith(color: AppTheme.textSecondary, height: 1.5),
               ),
               const SizedBox(height: 16),
+              Row(
+                children: [
+                  _PresetButton(
+                    label: 'Original',
+                    description: "Horner's order",
+                    selected: preset == 'original',
+                    onTap: () => onPresetChanged('original'),
+                  ),
+                  const SizedBox(width: 10),
+                  _PresetButton(
+                    label: 'Canonical',
+                    description: 'Bible book order',
+                    selected: preset == 'ordered',
+                    onTap: () => onPresetChanged('ordered'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
             ],
           ),
         ),
@@ -484,7 +515,7 @@ class _BookGroupsPage extends StatelessWidget {
 
 // ─── Page 3: Start Day ────────────────────────────────────────────────────────
 
-class _StartDayPage extends StatelessWidget {
+class _StartDayPage extends StatefulWidget {
   final int startDay;
   final ValueChanged<int> onDayChanged;
   final VoidCallback onBack;
@@ -502,7 +533,49 @@ class _StartDayPage extends StatelessWidget {
   });
 
   @override
+  State<_StartDayPage> createState() => _StartDayPageState();
+}
+
+class _StartDayPageState extends State<_StartDayPage> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: '${widget.startDay}');
+  }
+
+  @override
+  void didUpdateWidget(_StartDayPage old) {
+    super.didUpdateWidget(old);
+    // Keep the field in sync when +/- buttons change the value
+    if (widget.startDay != old.startDay) {
+      final newText = '${widget.startDay}';
+      if (_controller.text != newText) {
+        _controller.value = TextEditingValue(
+          text: newText,
+          selection: TextSelection.collapsed(offset: newText.length),
+        );
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _onTextChanged(String value) {
+    final parsed = int.tryParse(value);
+    if (parsed != null && parsed >= 1) {
+      widget.onDayChanged(parsed);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final startDay = widget.startDay;
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(24, 40, 24, 24),
       child: Column(
@@ -570,24 +643,35 @@ class _StartDayPage extends StatelessWidget {
                     _StepButton(
                       icon: Icons.remove_rounded,
                       onPressed: startDay > 1
-                          ? () => onDayChanged(startDay - 1)
+                          ? () => widget.onDayChanged(startDay - 1)
                           : null,
                     ),
-                    const SizedBox(width: 32),
-                    Text(
-                      '$startDay',
-                      style: Theme.of(context)
-                          .textTheme
-                          .displaySmall
-                          ?.copyWith(
-                            fontWeight: FontWeight.w700,
-                            color: AppTheme.primary,
-                          ),
+                    const SizedBox(width: 24),
+                    SizedBox(
+                      width: 90,
+                      child: TextField(
+                        controller: _controller,
+                        keyboardType: TextInputType.number,
+                        textAlign: TextAlign.center,
+                        onChanged: _onTextChanged,
+                        decoration: const InputDecoration(
+                          border: OutlineInputBorder(),
+                          contentPadding: EdgeInsets.symmetric(
+                              vertical: 12, horizontal: 8),
+                        ),
+                        style: Theme.of(context)
+                            .textTheme
+                            .displaySmall
+                            ?.copyWith(
+                              fontWeight: FontWeight.w700,
+                              color: AppTheme.primary,
+                            ),
+                      ),
                     ),
-                    const SizedBox(width: 32),
+                    const SizedBox(width: 24),
                     _StepButton(
                       icon: Icons.add_rounded,
-                      onPressed: () => onDayChanged(startDay + 1),
+                      onPressed: () => widget.onDayChanged(startDay + 1),
                     ),
                   ],
                 ),
@@ -605,7 +689,7 @@ class _StartDayPage extends StatelessWidget {
               ],
             ),
           ),
-          if (error != null) ...[
+          if (widget.error != null) ...[
             const SizedBox(height: 16),
             Container(
               padding: const EdgeInsets.all(12),
@@ -615,7 +699,7 @@ class _StartDayPage extends StatelessWidget {
                 border: Border.all(
                     color: AppTheme.danger.withValues(alpha: 0.3)),
               ),
-              child: Text(error!,
+              child: Text(widget.error!,
                   style: const TextStyle(
                       color: AppTheme.danger, fontSize: 14)),
             ),
@@ -624,14 +708,14 @@ class _StartDayPage extends StatelessWidget {
           Row(
             children: [
               OutlinedButton(
-                onPressed: loading ? null : onBack,
+                onPressed: widget.loading ? null : widget.onBack,
                 child: const Text('Back'),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: FilledButton(
-                  onPressed: loading ? null : onFinish,
-                  child: loading
+                  onPressed: widget.loading ? null : widget.onFinish,
+                  child: widget.loading
                       ? const SizedBox(
                           height: 20,
                           width: 20,
@@ -644,6 +728,76 @@ class _StartDayPage extends StatelessWidget {
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _PresetButton extends StatelessWidget {
+  final String label;
+  final String description;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _PresetButton({
+    required this.label,
+    required this.description,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
+          decoration: BoxDecoration(
+            color: selected
+                ? AppTheme.primary.withValues(alpha: 0.08)
+                : Theme.of(context).colorScheme.surfaceContainerLow,
+            border: Border.all(
+              color: selected
+                  ? AppTheme.primary
+                  : Theme.of(context).colorScheme.outlineVariant,
+              width: selected ? 1.5 : 1,
+            ),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
+                      color: selected
+                          ? AppTheme.primary
+                          : Theme.of(context).colorScheme.onSurface,
+                    ),
+                  ),
+                  const Spacer(),
+                  if (selected)
+                    const Icon(Icons.check_circle_rounded,
+                        size: 16, color: AppTheme.primary),
+                ],
+              ),
+              const SizedBox(height: 2),
+              Text(
+                description,
+                style: Theme.of(context)
+                    .textTheme
+                    .bodySmall
+                    ?.copyWith(color: AppTheme.textSecondary),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

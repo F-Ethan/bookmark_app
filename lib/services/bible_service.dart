@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:dio/dio.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import '../core/constants/app_constants.dart';
@@ -16,9 +17,7 @@ class BibleService {
   // Maps translation key → actual filename (without .json)
   static const _fileNames = {
     'kjv': 'en_kjv',
-    'web': 'en_web',
-    'asv': 'en_asv',
-    'ylt': 'en_ylt',
+    'bbe': 'en_bbe',
   };
 
   static const _bundledTranslation = 'kjv';
@@ -28,6 +27,11 @@ class BibleService {
     if (_loadedTranslation == translation && _bible != null) return;
     final file = await _fileForTranslation(translation);
     if (!await file.exists()) {
+      if (translation != _bundledTranslation) {
+        // File not downloaded yet — silently fall back to bundled KJV
+        await initialize(_bundledTranslation);
+        return;
+      }
       await _copyBundledAsset(translation);
     }
     await _loadFromFile(file);
@@ -113,5 +117,42 @@ class BibleService {
       result[name] = chapters;
     }
     _bible = result;
+  }
+
+  /// Returns plain text with translator markers stripped — use for saving/previewing.
+  static String cleanText(String text) =>
+      text.replaceAll('{', '').replaceAll('}', '');
+
+  /// Parses translator-added word markers ({word}) into italic spans for display.
+  /// Words inside {} are rendered in italic; everything else uses [baseStyle].
+  static List<InlineSpan> buildSpans(String text, TextStyle baseStyle) {
+    final spans = <InlineSpan>[];
+    final regex = RegExp(r'\{([^}]*)\}');
+    int lastEnd = 0;
+
+    for (final match in regex.allMatches(text)) {
+      if (match.start > lastEnd) {
+        spans.add(TextSpan(
+          text: text.substring(lastEnd, match.start),
+          style: baseStyle,
+        ));
+      }
+      spans.add(TextSpan(
+        text: match.group(1),
+        style: baseStyle.copyWith(fontStyle: FontStyle.italic),
+      ));
+      lastEnd = match.end;
+    }
+
+    if (lastEnd < text.length) {
+      spans.add(TextSpan(text: text.substring(lastEnd), style: baseStyle));
+    }
+
+    // No markers — return the whole text unstyled
+    if (spans.isEmpty) {
+      spans.add(TextSpan(text: text, style: baseStyle));
+    }
+
+    return spans;
   }
 }

@@ -12,6 +12,8 @@ import '../../screens/daily_screen.dart';
 import '../../screens/book_groups_screen.dart';
 import '../../screens/settings_screen.dart';
 import '../../screens/reader_screen.dart' show ReaderScreen, ReaderArgs;
+import '../../screens/bible_browse_screen.dart'
+    show BibleBrowseScreen, BibleBrowseArgs;
 
 class _AppStateNotifier extends ChangeNotifier {
   _AppStateNotifier() {
@@ -48,7 +50,9 @@ final routerProvider = Provider<GoRouter>((ref) {
       final isAuthRoute = loc == '/sign-in' || loc == '/sign-up';
 
       if (!isAuthenticated && !isAuthRoute) return '/sign-in';
-      if (isAuthenticated && isAuthRoute) return '/';
+      // Fully logged-in users don't need auth screens, but guests can reach
+      // sign-up to create a free account.
+      if (isLoggedIn && isAuthRoute) return '/';
       return null;
     },
     routes: [
@@ -86,6 +90,15 @@ final routerProvider = Provider<GoRouter>((ref) {
               final args = state.extra;
               if (args is! ReaderArgs) return const DailyScreen();
               return ReaderScreen(args: args);
+            },
+          ),
+          GoRoute(
+            path: 'bible',
+            builder: (context, state) {
+              final args = state.extra;
+              return BibleBrowseScreen(
+                args: args is BibleBrowseArgs ? args : null,
+              );
             },
           ),
         ],

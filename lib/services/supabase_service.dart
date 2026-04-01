@@ -68,6 +68,10 @@ class SupabaseService {
     await _client.from('reading_plans').delete().eq('user_id', _userId);
   }
 
+  static Future<void> deleteAccount() async {
+    await _client.rpc('delete_user');
+  }
+
   // ── Book Groups ───────────────────────────────────────────────────────────
 
   static Future<List<BibleGroup>> fetchBookGroups() async {

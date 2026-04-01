@@ -3,13 +3,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../core/theme/app_theme.dart';
+import '../core/utils/supabase_error.dart';
 import '../providers/appearance_provider.dart';
 import '../providers/guest_mode_provider.dart';
+import '../services/bible_service.dart';
 import '../providers/reading_plan_provider.dart';
 import '../providers/book_groups_provider.dart';
 import '../services/local_data_service.dart';
 import '../services/notification_service.dart';
+import '../services/supabase_service.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -149,6 +153,43 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
+  Future<void> _deleteAccount() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Account?'),
+        content: const Text(
+          'This will permanently delete your account and all reading progress. '
+          'This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete Account',
+                style: TextStyle(color: AppTheme.danger)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    try {
+      await SupabaseService.deleteAccount();
+      await LocalDataService.clearAll();
+      // Auth state change will navigate to sign-in automatically
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to delete account. Try again.')),
+      );
+    }
+  }
+
   Future<void> _signOut() async {
     final isGuest = ref.read(guestModeProvider);
     if (isGuest) {
@@ -195,7 +236,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     return planAsync.when(
       loading: () =>
           const Scaffold(body: Center(child: CircularProgressIndicator())),
-      error: (e, _) => Scaffold(body: Center(child: Text('Error: $e'))),
+      error: (e, _) => isSupabasePaused(e)
+          ? const SupabasePausedScreen()
+          : Scaffold(body: Center(child: Text('Error: $e'))),
       data: (plan) {
         if (plan == null || !_prefsLoaded) {
           return const Scaffold(
@@ -369,7 +412,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   ),
                   value: _notificationsEnabled,
                   onChanged: _toggleNotifications,
-                  activeColor: AppTheme.primary,
+                  activeThumbColor: AppTheme.primary,
                   secondary: Container(
                     width: 36,
                     height: 36,
@@ -399,6 +442,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               // Reader
               _SettingsSectionLabel('Reader'),
               const SizedBox(height: 12),
+              const _ReaderPreview(),
+              const SizedBox(height: 20),
               _OptionRow(
                 label: 'Font',
                 options: fontOptions,
@@ -435,6 +480,22 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               _JustifyToggle(),
               const SizedBox(height: 32),
 
+              // Our Other Apps
+              _SettingsSectionLabel('Our Other Apps'),
+              const SizedBox(height: 12),
+              _AppTile(
+                icon: Icons.qr_code_rounded,
+                iconColor: const Color(0xFF0D9488),
+                title: 'QR Vault',
+                subtitle: 'Secure QR code storage & scanner',
+                onTap: () => launchUrl(
+                  Uri.parse(
+                      'https://apps.apple.com/us/app/the-qrvault/id6759879006'),
+                  mode: LaunchMode.externalApplication,
+                ),
+              ),
+              const SizedBox(height: 32),
+
               // Danger zone
               Text(
                 'Danger Zone',
@@ -462,10 +523,78 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 ),
                 child: Text(isGuest ? 'Leave Guest Mode' : 'Sign Out'),
               ),
+              if (!isGuest) ...[
+                const SizedBox(height: 12),
+                OutlinedButton(
+                  onPressed: _deleteAccount,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppTheme.danger,
+                    side: const BorderSide(color: AppTheme.danger),
+                  ),
+                  child: const Text('Delete Account'),
+                ),
+              ],
             ],
           ),
         );
       },
+    );
+  }
+}
+
+// ── Reader preview ─────────────────────────────────────────────────────────────
+
+const _john316Fallback =
+    'For God so loved the world, that he gave his only begotten Son, '
+    'that whosoever believeth in him should not perish, but have '
+    'everlasting life.';
+
+class _ReaderPreview extends ConsumerWidget {
+  const _ReaderPreview();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final appearance = ref.watch(appearanceProvider);
+
+    // Try to get the live verse from BibleService; fall back to hardcoded KJV
+    final verses = BibleService.instance.getChapter('John', 3);
+    final verseText =
+        verses.length >= 16 ? verses[15] : _john316Fallback;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerLow,
+        border: Border.all(
+            color: Theme.of(context).colorScheme.outlineVariant),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.auto_stories_rounded,
+                  size: 14, color: AppTheme.textSecondary),
+              const SizedBox(width: 6),
+              Text(
+                'Preview — John 3:16',
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: AppTheme.textSecondary,
+                      letterSpacing: 0.4,
+                    ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Text(
+            verseText,
+            textAlign: appearance.textAlign,
+            style: appearance.readerTextStyle(),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -553,6 +682,77 @@ class _OptionRow extends StatelessWidget {
           }).toList(),
         ),
       ],
+    );
+  }
+}
+
+/// A tappable tile linking to an external app.
+class _AppTile extends StatelessWidget {
+  final IconData icon;
+  final Color iconColor;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  const _AppTile({
+    required this.icon,
+    required this.iconColor,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerLow,
+          border:
+              Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: iconColor.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(icon, color: iconColor, size: 22),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w500),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: Theme.of(context)
+                        .textTheme
+                        .bodySmall
+                        ?.copyWith(color: AppTheme.textSecondary),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.open_in_new_rounded,
+                size: 16, color: AppTheme.textSecondary),
+          ],
+        ),
+      ),
     );
   }
 }

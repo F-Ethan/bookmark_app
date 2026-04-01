@@ -1,16 +1,23 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/theme/app_theme.dart';
+import '../data/bible_sections.dart';
 import '../providers/appearance_provider.dart';
+import '../providers/chapter_progress_provider.dart';
 import '../providers/reading_plan_provider.dart';
 import '../providers/translation_provider.dart';
+import '../providers/verse_highlights_provider.dart';
 import '../services/bible_service.dart';
 
 // ── Args passed via go_router extra ───────────────────────────────────────────
 
 class ReaderArgs {
+  /// Chapters for the day (e.g. ['Matthew 1', 'Genesis 1', ...]).
+  /// For free-read, pass a single-item list.
   final List<String> dayChapters;
   final int initialIndex;
+
+  /// -1 = free-read (no day tracking). Any other value = daily reading day.
   final int readingDay;
 
   const ReaderArgs({
@@ -32,33 +39,44 @@ class ReaderScreen extends ConsumerStatefulWidget {
 }
 
 class _ReaderScreenState extends ConsumerState<ReaderScreen> {
+  // ── Daily reading state ────────────────────────────────────────────────────
   late int _index;
+
+  // ── Free-read state ────────────────────────────────────────────────────────
+  bool _freeReadMode = false;
+  late String _freeBook;
+  late int _freeChapter;
+  bool _selectorVisible = true;
+
   final _scrollController = ScrollController();
   bool _downloading = false;
   String? _downloadError;
 
-  @override
-  void initState() {
-    super.initState();
-    _index = widget.args.initialIndex;
-  }
+  // ── Derived ────────────────────────────────────────────────────────────────
 
-  @override
-  void dispose() {
-    _scrollController.dispose();
-    super.dispose();
-  }
+  bool get _isFreeRead =>
+      widget.args.readingDay == -1 || _freeReadMode;
 
-  // ── Helpers ─────────────────────────────────────────────────────────────────
+  String get _chapterRef =>
+      _isFreeRead ? '$_freeBook $_freeChapter' : widget.args.dayChapters[_index];
 
-  String get _chapterRef => widget.args.dayChapters[_index];
-  bool get _isLast => _index == widget.args.dayChapters.length - 1;
+  bool get _isLastDailyChapter =>
+      _index == widget.args.dayChapters.length - 1;
 
-  (String book, int chapter) get _parsed {
+  (String, int) get _parsed {
+    if (_isFreeRead) return (_freeBook, _freeChapter);
     final parts = _chapterRef.trim().split(' ');
     final chapter = int.tryParse(parts.last) ?? 1;
     final book = parts.sublist(0, parts.length - 1).join(' ');
     return (book, chapter);
+  }
+
+  int _chaptersFor(String bookName) {
+    try {
+      return allBibleBooks.firstWhere((b) => b.name == bookName).chapters ?? 1;
+    } catch (_) {
+      return 1;
+    }
   }
 
   List<String> _verses(String translation) {
@@ -67,25 +85,111 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     return BibleService.instance.getChapter(book, chapter);
   }
 
-  // ── Actions ─────────────────────────────────────────────────────────────────
+  // ── Init ────────────────────────────────────────────────────────────────────
 
-  void _nextChapter() {
-    setState(() => _index++);
-    if (_scrollController.hasClients) {
-      _scrollController.jumpTo(0);
+  @override
+  void initState() {
+    super.initState();
+    _index = widget.args.initialIndex;
+    // Initialise free-read state from the starting chapter
+    final parts = widget.args.dayChapters[_index].trim().split(' ');
+    _freeChapter = int.tryParse(parts.last) ?? 1;
+    _freeBook = parts.sublist(0, parts.length - 1).join(' ');
+    // If launched as free-read from the start
+    if (widget.args.readingDay == -1) _freeReadMode = true;
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  // ── Daily reading actions ───────────────────────────────────────────────────
+
+  void _nextDailyChapter() {
+    final plan = ref.read(readingPlanProvider).valueOrNull;
+    if (plan != null && widget.args.readingDay == plan.currentDay) {
+      ref.read(chapterProgressProvider.notifier).markRead(_index);
     }
+    setState(() => _index++);
+    _scrollController.jumpTo(0);
   }
 
   Future<void> _markDayAsRead() async {
     final plan = ref.read(readingPlanProvider).valueOrNull;
     if (plan == null) return;
     if (widget.args.readingDay >= plan.currentDay) {
+      await ref.read(chapterProgressProvider.notifier).markRead(_index);
       await ref
           .read(readingPlanProvider.notifier)
           .setCurrentDay(widget.args.readingDay + 1);
     }
     if (mounted) Navigator.of(context).pop();
   }
+
+  void _enterFreeRead() {
+    final (book, chapter) = _parsed;
+    setState(() {
+      _freeBook = book;
+      _freeChapter = chapter;
+      _freeReadMode = true;
+    });
+  }
+
+  // ── Free-read actions ───────────────────────────────────────────────────────
+
+  void _freeReadPrev() {
+    if (_freeChapter > 1) {
+      setState(() => _freeChapter--);
+    } else {
+      final bookIndex =
+          allBibleBooks.indexWhere((b) => b.name == _freeBook);
+      if (bookIndex > 0) {
+        final prev = allBibleBooks[bookIndex - 1];
+        setState(() {
+          _freeBook = prev.name;
+          _freeChapter = prev.chapters ?? 1;
+        });
+      }
+    }
+    _scrollController.jumpTo(0);
+  }
+
+  void _freeReadNext() {
+    final maxCh = _chaptersFor(_freeBook);
+    if (_freeChapter < maxCh) {
+      setState(() => _freeChapter++);
+    } else {
+      final bookIndex =
+          allBibleBooks.indexWhere((b) => b.name == _freeBook);
+      if (bookIndex < allBibleBooks.length - 1) {
+        setState(() {
+          _freeBook = allBibleBooks[bookIndex + 1].name;
+          _freeChapter = 1;
+        });
+      }
+    }
+    _scrollController.jumpTo(0);
+  }
+
+  void _onFreeBookChanged(String? book) {
+    if (book == null) return;
+    final maxCh = _chaptersFor(book);
+    setState(() {
+      _freeBook = book;
+      _freeChapter = _freeChapter.clamp(1, maxCh);
+    });
+    _scrollController.jumpTo(0);
+  }
+
+  void _onFreeChapterChanged(int? chapter) {
+    if (chapter == null) return;
+    setState(() => _freeChapter = chapter);
+    _scrollController.jumpTo(0);
+  }
+
+  // ── Translation ─────────────────────────────────────────────────────────────
 
   Future<void> _switchTranslation(String translation) async {
     setState(() {
@@ -96,7 +200,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       await ref.read(translationProvider.notifier).setTranslation(translation);
     } catch (_) {
       if (mounted) {
-        setState(() => _downloadError = 'Download failed. Check your connection.');
+        setState(() =>
+            _downloadError = 'Download failed. Check your connection.');
       }
     } finally {
       if (mounted) setState(() => _downloading = false);
@@ -110,14 +215,35 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     final translation = ref.watch(translationProvider);
     final appearance = ref.watch(appearanceProvider);
     final plan = ref.watch(readingPlanProvider).valueOrNull;
-    final alreadyRead = plan != null &&
-        widget.args.readingDay < plan.currentDay;
+    final alreadyRead =
+        plan != null && widget.args.readingDay < plan.currentDay;
     final verses = _verses(translation);
+    final maxFreeChapter = _chaptersFor(_freeBook);
 
     return Scaffold(
       appBar: AppBar(
         title: Text(_chapterRef),
         actions: [
+          // Switch to free-read (only shown in daily mode)
+          if (!_isFreeRead)
+            IconButton(
+              icon: const Icon(Icons.auto_stories_rounded),
+              tooltip: 'Switch to free reading',
+              onPressed: _enterFreeRead,
+            ),
+          // Toggle chapter selector (only in free-read mode)
+          if (_isFreeRead)
+            IconButton(
+              icon: AnimatedRotation(
+                turns: _selectorVisible ? 0.5 : 0,
+                duration: const Duration(milliseconds: 250),
+                child: const Icon(Icons.expand_more_rounded),
+              ),
+              tooltip:
+                  _selectorVisible ? 'Hide selector' : 'Show selector',
+              onPressed: () =>
+                  setState(() => _selectorVisible = !_selectorVisible),
+            ),
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: _TranslationButton(
@@ -127,57 +253,160 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           ),
         ],
       ),
-      body: _downloading
-          ? const Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  CircularProgressIndicator(),
-                  SizedBox(height: 16),
-                  Text('Downloading translation…'),
-                ],
-              ),
-            )
-          : _downloadError != null
-              ? _ErrorView(
-                  message: _downloadError!,
-                  onRetry: () => _switchTranslation(translation),
-                )
-              : verses.isEmpty
-                  ? const Center(child: Text('No content available.'))
-                  : ListView.builder(
-                      controller: _scrollController,
-                      padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
-                      itemCount: verses.length,
-                      itemBuilder: (context, i) => Padding(
-                        padding: EdgeInsets.only(
-                            bottom: appearance.lineHeight * 4),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            SizedBox(
-                              width: 28,
-                              child: Text(
-                                '${i + 1}',
-                                style: appearance.readerTextStyle(
-                                  size: appearance.fontSize * 0.75,
-                                ).copyWith(
-                                  color: AppTheme.primary,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                            Expanded(
-                              child: Text(
-                                verses[i],
-                                textAlign: appearance.textAlign,
-                                style: appearance.readerTextStyle(),
-                              ),
-                            ),
-                          ],
-                        ),
+
+      // ── Free-read chapter selector ──────────────────────────────────────────
+      body: Column(
+        children: [
+          if (_isFreeRead)
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 250),
+              curve: Curves.easeInOut,
+              height: _selectorVisible ? 72 : 0,
+              child: ClipRect(
+                child: OverflowBox(
+                  alignment: Alignment.topCenter,
+                  maxHeight: 72,
+                  child: Container(
+                    height: 72,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 10),
+                    decoration: BoxDecoration(
+                      color:
+                          Theme.of(context).colorScheme.surfaceContainerLow,
+                      border: Border(
+                        bottom: BorderSide(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .outlineVariant),
                       ),
                     ),
+                    child: Row(
+                      children: [
+                        // Book dropdown
+                        Expanded(
+                          flex: 3,
+                          child: DropdownButtonFormField<String>(
+                            initialValue: _freeBook,
+                            isExpanded: true,
+                            isDense: true,
+                            decoration: const InputDecoration(
+                              labelText: 'Book',
+                              border: OutlineInputBorder(),
+                              contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 8),
+                            ),
+                            items: allBibleBooks
+                                .map((b) => DropdownMenuItem(
+                                    value: b.name, child: Text(b.name)))
+                                .toList(),
+                            onChanged: _onFreeBookChanged,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        // Chapter dropdown
+                        Expanded(
+                          flex: 2,
+                          child: DropdownButtonFormField<int>(
+                            initialValue:
+                                _freeChapter.clamp(1, maxFreeChapter),
+                            isExpanded: true,
+                            isDense: true,
+                            decoration: const InputDecoration(
+                              labelText: 'Chapter',
+                              border: OutlineInputBorder(),
+                              contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 8),
+                            ),
+                            items: List.generate(
+                              maxFreeChapter,
+                              (i) => DropdownMenuItem(
+                                  value: i + 1, child: Text('${i + 1}')),
+                            ),
+                            onChanged: _onFreeChapterChanged,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
+          // ── Verse content ─────────────────────────────────────────────────
+          Expanded(
+            child: _downloading
+                ? const Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        CircularProgressIndicator(),
+                        SizedBox(height: 16),
+                        Text('Downloading translation…'),
+                      ],
+                    ),
+                  )
+                : _downloadError != null
+                    ? _ErrorView(
+                        message: _downloadError!,
+                        onRetry: () => _switchTranslation(translation),
+                      )
+                    : verses.isEmpty
+                        ? const Center(child: Text('No content available.'))
+                        : ListView.builder(
+                            controller: _scrollController,
+                            padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
+                            itemCount: verses.length,
+                            itemBuilder: (context, i) {
+                              final (book, chapter) = _parsed;
+                              final verseNum = i + 1;
+                              final bodyColor =
+                                  Theme.of(context).colorScheme.onSurface;
+                              final verseStyle = appearance
+                                  .readerTextStyle()
+                                  .copyWith(color: bodyColor);
+                              return Padding(
+                                padding: EdgeInsets.only(
+                                    bottom: appearance.lineHeight * 4),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    SizedBox(
+                                      width: 28,
+                                      child: Text(
+                                        '$verseNum',
+                                        style: appearance
+                                            .readerTextStyle(
+                                              size: appearance.fontSize * 0.75,
+                                            )
+                                            .copyWith(
+                                              color: AppTheme.primary,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                      ),
+                                    ),
+                                    Expanded(
+                                      child: RichText(
+                                        textAlign: appearance.textAlign,
+                                        text: TextSpan(
+                                          children: BibleService.buildSpans(
+                                              verses[i], verseStyle),
+                                        ),
+                                      ),
+                                    ),
+                                    _HeartButton(
+                                      book: book,
+                                      chapter: chapter,
+                                      verse: verseNum,
+                                      verseText: verses[i],
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+          ),
+        ],
+      ),
 
       // ── Bottom bar ───────────────────────────────────────────────────────────
       bottomNavigationBar: Container(
@@ -190,22 +419,55 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           ),
         ),
         child: SafeArea(
-          child: _isLast
-              ? FilledButton.icon(
-                  onPressed: alreadyRead ? () => Navigator.of(context).pop() : _markDayAsRead,
-                  icon: Icon(alreadyRead
-                      ? Icons.check_circle_outline_rounded
-                      : Icons.check_circle_rounded),
-                  label: Text(alreadyRead ? 'Done' : 'Mark Day as Read'),
+          child: _isFreeRead
+              ? Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: (_freeBook ==
+                                    allBibleBooks.first.name &&
+                                _freeChapter == 1)
+                            ? null
+                            : _freeReadPrev,
+                        icon: const Icon(Icons.arrow_back_rounded, size: 18),
+                        label: const Text('Previous'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: FilledButton.icon(
+                        onPressed: (_freeBook ==
+                                    allBibleBooks.last.name &&
+                                _freeChapter ==
+                                    _chaptersFor(allBibleBooks.last.name))
+                            ? null
+                            : _freeReadNext,
+                        icon: const Icon(Icons.arrow_forward_rounded,
+                            size: 18),
+                        label: const Text('Next'),
+                      ),
+                    ),
+                  ],
                 )
-              : FilledButton.icon(
-                  onPressed: _downloading ? null : _nextChapter,
-                  icon: const Icon(Icons.arrow_forward_rounded),
-                  label: Text(
-                    'Next: ${widget.args.dayChapters[_index + 1]}',
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
+              : _isLastDailyChapter
+                  ? FilledButton.icon(
+                      onPressed: alreadyRead
+                          ? () => Navigator.of(context).pop()
+                          : _markDayAsRead,
+                      icon: Icon(alreadyRead
+                          ? Icons.check_circle_outline_rounded
+                          : Icons.check_circle_rounded),
+                      label:
+                          Text(alreadyRead ? 'Done' : 'Mark Day as Read'),
+                    )
+                  : FilledButton.icon(
+                      onPressed: _downloading ? null : _nextDailyChapter,
+                      icon: const Icon(Icons.arrow_forward_rounded),
+                      label: Text(
+                        'Next: ${widget.args.dayChapters[_index + 1]}',
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
         ),
       ),
     );
@@ -280,7 +542,6 @@ class _TranslationSheet extends ConsumerStatefulWidget {
 }
 
 class _TranslationSheetState extends ConsumerState<_TranslationSheet> {
-  // translation key → is downloaded
   Map<String, bool> _downloaded = {};
   bool _loading = true;
 
@@ -295,10 +556,12 @@ class _TranslationSheetState extends ConsumerState<_TranslationSheet> {
     for (final key in translationLabels.keys) {
       statuses[key] = await BibleService.instance.isTranslationDownloaded(key);
     }
-    if (mounted) setState(() {
-      _downloaded = statuses;
-      _loading = false;
-    });
+    if (mounted) {
+      setState(() {
+        _downloaded = statuses;
+        _loading = false;
+      });
+    }
   }
 
   @override
@@ -394,6 +657,87 @@ class _TranslationSheetState extends ConsumerState<_TranslationSheet> {
   }
 }
 
+// ── Heart button ───────────────────────────────────────────────────────────────
+
+class _HeartButton extends ConsumerStatefulWidget {
+  final String book;
+  final int chapter;
+  final int verse;
+  final String verseText;
+
+  const _HeartButton({
+    required this.book,
+    required this.chapter,
+    required this.verse,
+    required this.verseText,
+  });
+
+  @override
+  ConsumerState<_HeartButton> createState() => _HeartButtonState();
+}
+
+class _HeartButtonState extends ConsumerState<_HeartButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _scale;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 200),
+    );
+    _scale = Tween<double>(begin: 1.0, end: 1.4).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeOut),
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _tap() async {
+    await _controller.forward();
+    await _controller.reverse();
+    await ref.read(verseHighlightsProvider.notifier).toggle(
+          book: widget.book,
+          chapter: widget.chapter,
+          verse: widget.verse,
+          verseText: BibleService.cleanText(widget.verseText),
+        );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final highlighted = ref
+        .watch(verseHighlightsProvider.notifier)
+        .isHighlighted(widget.book, widget.chapter, widget.verse);
+
+    return GestureDetector(
+      onTap: _tap,
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        padding: const EdgeInsets.only(left: 8, top: 2),
+        child: ScaleTransition(
+          scale: _scale,
+          child: Icon(
+            highlighted
+                ? Icons.favorite_rounded
+                : Icons.favorite_border_rounded,
+            size: 18,
+            color: highlighted
+                ? const Color(0xFFEF4444)
+                : AppTheme.textSecondary,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 // ── Error view ─────────────────────────────────────────────────────────────────
 
 class _ErrorView extends StatelessWidget {
@@ -415,8 +759,7 @@ class _ErrorView extends StatelessWidget {
             const SizedBox(height: 16),
             Text(message,
                 textAlign: TextAlign.center,
-                style:
-                    const TextStyle(color: AppTheme.textSecondary)),
+                style: const TextStyle(color: AppTheme.textSecondary)),
             const SizedBox(height: 20),
             FilledButton(onPressed: onRetry, child: const Text('Retry')),
           ],

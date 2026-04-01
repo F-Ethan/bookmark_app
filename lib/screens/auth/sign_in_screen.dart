@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/utils/supabase_error.dart';
 import '../../providers/guest_mode_provider.dart';
+import '../../providers/reading_plan_provider.dart';
 
 class SignInScreen extends ConsumerStatefulWidget {
   const SignInScreen({super.key});
@@ -29,10 +31,19 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
         email: _emailController.text.trim(),
         password: _passwordController.text,
       );
+      // Clear guest mode so the app shows the authenticated profile
+      if (mounted) {
+        await exitGuestMode(ref.read(guestModeProvider.notifier));
+        ref.invalidate(readingPlanProvider);
+      }
     } on AuthException catch (e) {
       if (mounted) setState(() => _error = e.message);
     } catch (e) {
-      if (mounted) setState(() => _error = 'Something went wrong. Try again.');
+      if (mounted) {
+        setState(() => _error = isSupabasePaused(e)
+            ? 'The database is temporarily unavailable due to inactivity.\nPlease contact support@gamelogic.dev to reactivate it.'
+            : 'Something went wrong. Try again.');
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -44,7 +55,7 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
       builder: (context) => AlertDialog(
         title: const Text('Try without an account?'),
         content: const Text(
-          'You can use Bookmark without signing up. Your reading progress will be saved on this device only.\n\n'
+          'You can use Bookmark: Horner Bible Reading without signing up. Your reading progress will be saved on this device only.\n\n'
           'If you uninstall the app or switch devices, your progress will be lost. '
           'You can create a free account at any time to back up your data.',
         ),
@@ -100,7 +111,7 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
               ),
               const SizedBox(height: 24),
               Text(
-                'Bible Reading Plan',
+                'Bookmark: Horner Bible Reading',
                 style: Theme.of(context).textTheme.headlineMedium?.copyWith(
                       fontWeight: FontWeight.w700,
                       letterSpacing: -0.3,

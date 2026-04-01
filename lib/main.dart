@@ -56,7 +56,7 @@ class MyApp extends ConsumerWidget {
     final router = ref.watch(routerProvider);
     final themeMode = ref.watch(appearanceProvider.select((a) => a.themeMode));
     return MaterialApp.router(
-      title: 'Bible Reading Plan',
+      title: 'Bookmark: Horner Bible Reading',
       theme: AppTheme.light,
       darkTheme: AppTheme.dark,
       themeMode: themeMode,

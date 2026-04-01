@@ -4,9 +4,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import '../core/theme/app_theme.dart';
+import '../core/utils/supabase_error.dart';
 import '../data/bible_sections.dart';
 import '../providers/reading_plan_provider.dart';
 import '../providers/book_groups_provider.dart';
+import '../providers/chapter_progress_provider.dart';
+import '../providers/verse_highlights_provider.dart';
+import '../services/bible_service.dart';
 import '../utils/chapter_utils.dart';
 import 'reader_screen.dart' show ReaderArgs;
 
@@ -61,7 +65,9 @@ class _DailyScreenState extends ConsumerState<DailyScreen> {
     return planAsync.when(
       loading: () =>
           const Scaffold(body: Center(child: CircularProgressIndicator())),
-      error: (e, _) => Scaffold(body: Center(child: Text('Error: $e'))),
+      error: (e, _) => isSupabasePaused(e)
+          ? const SupabasePausedScreen()
+          : Scaffold(body: Center(child: Text('Error: $e'))),
       data: (plan) {
         if (plan == null) {
           return const Scaffold(
@@ -308,7 +314,17 @@ class _DailyScreenState extends ConsumerState<DailyScreen> {
                                       ?.copyWith(fontWeight: FontWeight.w500),
                                 ),
                               ),
-                              const SizedBox(width: 8),
+                              const SizedBox(width: 4),
+                              _VerseBookmarkButton(
+                                chapterRef: todaysChapters[index],
+                                readingDay: currentDay,
+                              ),
+                              // Chapter read checkmark
+                              _ChapterCheckButton(
+                                chapterIndex: index,
+                                isCurrentDay: displayDay == currentDay,
+                                isPastDay: displayDay < currentDay,
+                              ),
                               TextButton(
                                 onPressed: () => context.push(
                                   '/reader',
@@ -379,6 +395,168 @@ class _DailyScreenState extends ConsumerState<DailyScreen> {
           ),
         );
       },
+    );
+  }
+}
+
+// ── Verse bookmark button + picker ─────────────────────────────────────────────
+
+class _VerseBookmarkButton extends ConsumerWidget {
+  final String chapterRef;
+  final int readingDay;
+
+  const _VerseBookmarkButton({
+    required this.chapterRef,
+    required this.readingDay,
+  });
+
+  (String, int) get _parsed {
+    final parts = chapterRef.trim().split(' ');
+    final chapter = int.tryParse(parts.last) ?? 1;
+    final book = parts.sublist(0, parts.length - 1).join(' ');
+    return (book, chapter);
+  }
+
+  void _showPicker(BuildContext context, WidgetRef ref) {
+    final (book, chapter) = _parsed;
+    final verses = BibleService.instance.getChapter(book, chapter);
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => DraggableScrollableSheet(
+        initialChildSize: 0.6,
+        minChildSize: 0.4,
+        maxChildSize: 0.9,
+        expand: false,
+        builder: (context, scrollController) => Column(
+          children: [
+            const SizedBox(height: 12),
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Row(
+                children: [
+                  const Icon(Icons.favorite_rounded,
+                      color: Color(0xFFEF4444), size: 18),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Save a verse from $chapterRef',
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w600, fontSize: 15),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Divider(),
+            Expanded(
+              child: verses.isEmpty
+                  ? const Center(child: Text('Open the reader to load verses'))
+                  : ListView.builder(
+                      controller: scrollController,
+                      itemCount: verses.length,
+                      itemBuilder: (context, i) {
+                        final verseNum = i + 1;
+                        final highlighted = ref
+                            .read(verseHighlightsProvider.notifier)
+                            .isHighlighted(book, chapter, verseNum);
+                        return ListTile(
+                          leading: Text(
+                            '$verseNum',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              color: highlighted
+                                  ? const Color(0xFFEF4444)
+                                  : const Color(0xFF4F46E5),
+                            ),
+                          ),
+                          title: Text(
+                            BibleService.cleanText(verses[i]),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 14),
+                          ),
+                          trailing: highlighted
+                              ? const Icon(Icons.favorite_rounded,
+                                  color: Color(0xFFEF4444), size: 18)
+                              : null,
+                          onTap: () async {
+                            Navigator.pop(context);
+                            await ref
+                                .read(verseHighlightsProvider.notifier)
+                                .toggle(
+                                  book: book,
+                                  chapter: chapter,
+                                  verse: verseNum,
+                                  verseText: BibleService.cleanText(verses[i]),
+                                );
+                          },
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return IconButton(
+      icon: const Icon(Icons.favorite_border_rounded, size: 18),
+      color: const Color(0xFFEF4444),
+      tooltip: 'Save a verse',
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+      onPressed: () => _showPicker(context, ref),
+    );
+  }
+}
+
+class _ChapterCheckButton extends ConsumerWidget {
+  final int chapterIndex;
+  final bool isCurrentDay;
+  final bool isPastDay;
+
+  const _ChapterCheckButton({
+    required this.chapterIndex,
+    required this.isCurrentDay,
+    required this.isPastDay,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Past days are implicitly fully read
+    final checked = isPastDay ||
+        (ref.watch(chapterProgressProvider).valueOrNull?.contains(chapterIndex) ?? false);
+
+    return IconButton(
+      icon: Icon(
+        checked ? Icons.check_circle_rounded : Icons.check_circle_outline_rounded,
+        size: 22,
+        color: checked
+            ? const Color(0xFF22C55E)
+            : Theme.of(context).colorScheme.outlineVariant,
+      ),
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+      tooltip: checked ? 'Mark unread' : 'Mark as read',
+      onPressed: isCurrentDay
+          ? () => ref.read(chapterProgressProvider.notifier).toggle(chapterIndex)
+          : null,
     );
   }
 }

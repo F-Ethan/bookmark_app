@@ -77,7 +77,7 @@ class NotificationService {
       );
 
       if (granted != true) {
-        print('iOS notification permission denied');
+        debugPrint('iOS notification permission denied');
       }
     }
   }
