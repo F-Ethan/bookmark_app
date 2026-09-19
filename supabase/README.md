@@ -6,7 +6,13 @@ for the project URL). These files did not exist before 2026-09-18's security aud
 
 ## Applying
 
-None of these have been applied to the live project yet — apply them yourself via one of:
+0001–0005 were applied to the live project on 2026-09-19 (including
+dropping the pre-existing policy names that would otherwise OR with the
+new owner-only policies, and an UPDATE policy on `chapter_progress` for
+upsert-on-conflict). Keep this folder matching production: if you change
+RLS or schema in the dashboard, add a new numbered file here.
+
+To re-apply or apply on a fresh project, use one of:
 
 **Supabase SQL editor** (simplest): open the project dashboard → SQL Editor, paste the contents
 of each file in numeric order, run.
@@ -21,13 +27,16 @@ supabase db push
 ## Files
 
 - `0001_rls_policies.sql` — enables Row Level Security and adds owner-only
-  policies on `reading_plans`, `book_groups`, and `verse_highlights`. **Check
-  the column names in the "Verify before relying on this file" note inside it
-  against your actual schema before applying** — this was written from how the
-  Dart client queries these tables, not from a direct look at the live schema.
-- `0002_chapter_progress.sql` — creates the new `chapter_progress` table that
+  `*_own` policies on `reading_plans`, `book_groups`, and `verse_highlights`.
+  Also drops the old live policy names (`Users manage own plan`,
+  `Users manage own groups`, `Authenticated users can read all highlights`,
+  `Users can delete own highlights`, `Users can insert own highlights`)
+  first — Postgres ORs policies, so leaving the old SELECT would keep the
+  cross-user highlight leak.
+- `0002_chapter_progress.sql` — creates the `chapter_progress` table that
   `lib/services/supabase_service.dart` now reads/writes for signed-in users,
-  with the same owner-only RLS policy pattern.
+  with owner-only RLS including `chapter_progress_update_own` (the app
+  upserts on conflict when marking a chapter read).
 - `0003_trending_highlights.sql` — adds a `SECURITY DEFINER` function,
   `get_trending_highlights`, that returns anonymized counts of how many
   distinct users highlighted each verse in a given set of chapters. It backs

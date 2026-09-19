@@ -1,14 +1,29 @@
-# Audit & Enterprise-Readiness Progress Log
+# Progress
 
-**Scope:** Full repo deep-dive — security, correctness/glitches, and "professional/enterprise
-readiness" — requested 2026-09-18. Covers all of `lib/`, `pubspec.yaml`, `analysis_options.yaml`,
-`test/`, iOS/Android platform config, and git history.
+Working notes for Bookmark. Agents must record anything discovered but left unfixed under **Known gaps**.
 
-**Methodology:** Manual read of every Dart source file, `flutter analyze`, `flutter pub outdated`,
-targeted greps (`print(`, `http://`, `TODO|FIXME|HACK`, `catch (e)`), and a git-history check
-for committed secrets.
+## Known gaps
 
-Status legend: 🔴 not started · 🟡 in progress / needs your action · 🟢 done.
+- **README is stale.** It still describes a SharedPreferences-only, iOS-only tracker. The app now has Supabase auth, guest mode, an in-app reader, book-group editing, verse highlights, optional BBE download, appearance settings, a leaderboard, and a supporters list.
+- **`dart_defines/dev.json` is required for local `--dart-define-from-file` launches and is gitignored.** The file is not in the repo; new machines need a local copy. Do not commit it.
+- **Guest data is not migrated on sign-up.** Creating an account after guest use does not copy the local plan, groups, or highlights into Supabase.
+- **README roadmap vs code.** Android embeddings, local notifications, and in-app Bible text already exist in some form. Export (PDF/CSV), audio, and a home-screen widget are still absent. Screenshots are still marked "still to come."
+- **No `LICENSE` file**, though the README claims MIT.
+- **Live privacy page is still generic.** `gamelogic.dev/bookmark/privacy-policy` does not yet reflect Leaderboard display names, Supporters, or verse highlights. Replace with `docs/policies.md`.
+- **Sentry is scaffolded but off** until `SENTRY_DSN` is set. Major dependency upgrades (`go_router`, `riverpod`, `flutter_local_notifications`) are still deferred — see #14 / #15 below.
+- **Patreon URL is empty.** `AppConstants.patreonUrl` stays unset until a page exists; add supporter rows in the Supabase dashboard as people sign up.
+
+---
+
+## 2026-09-19 — Live migrations applied
+
+`supabase/migrations/0001`–`0005` were applied to the live Supabase project on 2026-09-19.
+
+- **0001** closed the `verse_highlights` cross-user SELECT by dropping the old live policy names (`Users manage own plan`, `Users manage own groups`, `Authenticated users can read all highlights`, `Users can delete own highlights`, `Users can insert own highlights`) before recreating owner-only `*_own` policies. Postgres ORs policies — leaving the old SELECT would keep the leak.
+- **0002** `chapter_progress` includes `chapter_progress_update_own` (`auth.uid() = user_id`) so signed-in upserts-on-conflict succeed.
+- **0003–0005** match what is live: `get_trending_highlights`, `reading_plans` streak/leaderboard columns + `get_leaderboard`, and the `supporters` table.
+
+Repo SQL files are aligned with production. New schema/RLS changes should be a new numbered migration, not a silent dashboard edit.
 
 ---
 
@@ -74,9 +89,8 @@ actually disclosing what becomes public, **this still needs to be replaced with 
 `docs/policies.md`**, not just linked to correctly.
 
 **Still needed from you:**
-1. Apply `supabase/migrations/0004_reading_stats.sql` and `0005_supporters.sql` (alongside
-   0001–0003 if not already done) — the leaderboard and streak sync will error against the live
-   database until you do (caught gracefully — no crash — but the features won't work).
+1. ~~Apply `supabase/migrations/0004_reading_stats.sql` and `0005_supporters.sql`~~ — applied
+   live 2026-09-19 with 0001–0003.
 2. Hand `docs/policies.md` to your gamelogic repo's agent to **replace** the current generic
    content at `gamelogic.dev/bookmark/privacy-policy` — the link now points to the right page,
    but the page itself still needs updating.
@@ -108,10 +122,7 @@ owner-only per #2/#1's RLS.
   decorative quote mark, italic verse text, and a heart (own, tap to remove) or flame+count
   (trending) badge, with a page-dot indicator matching the style already used in `daily_screen.dart`.
 
-**Still needed from you:** apply `supabase/migrations/0003_trending_highlights.sql` — until you
-do, `trendingHighlightsProvider` will surface an error from the RPC call for signed-in users
-(caught by the `AsyncValue.error` branch, so it just shows no trending cards rather than
-crashing, but you won't see the feature until the migration is applied).
+**0003 applied live 2026-09-19.**
 
 ---
 
@@ -121,13 +132,8 @@ All 18 findings below were addressed in-repo where that was possible from a code
 (no live Supabase credentials, no Sentry account — see the two 🟡 items). `flutter analyze` is
 clean and `flutter test` passes (9 tests) as of this pass.
 
-**You still need to do two things by hand:**
-1. **Apply the SQL in `supabase/migrations/`** (see `supabase/README.md`) — this is the actual
-   security fix for #1/#2/#4, and the schema change #9 depends on. The code changes alone are
-   defense-in-depth; nothing is enforced server-side until you run these.
-2. **Decide when to do the deferred major dependency upgrades** (#15) — go_router, riverpod,
-   and flutter_local_notifications are still behind by design (see below); you chose to defer
-   these as a separate, deliberate pass rather than bundle breaking changes into this one.
+Migrations **0001–0005 are applied** on the live project (2026-09-19). Remaining manual items:
+Sentry DSN, deferred major dependency upgrades (#15), and publishing `docs/policies.md`.
 
 ---
 
@@ -140,26 +146,28 @@ length, so they cycle at different rates — the exact book/chapter combination 
 every day by definition of the method itself. This is now locked in by `test/chapter_utils_test.dart`.
 
 What *was* real, and adjacent to what you noticed, both now fixed in code (#9, #10 below):
-- Per-chapter "read" checkmarks now sync to Supabase for signed-in users instead of living only
-  in local device storage — once you've applied `supabase/migrations/0002_chapter_progress.sql`.
+- Per-chapter "read" checkmarks now sync to Supabase for signed-in users (`0002_chapter_progress.sql`,
+  applied live 2026-09-19, including UPDATE for upsert).
 - Resetting book groups to defaults now actually saves the defaults, not an empty row.
 
 ---
 
 ## Security findings
 
-### 1. 🟡 CRITICAL — IDOR on verse highlight deletion
+### 1. 🟢 CRITICAL — IDOR on verse highlight deletion
 **File:** `lib/services/verse_highlight_service.dart`.
 **Code fix applied:** `remove(id)` now also filters `.eq('user_id', userId)` client-side.
-**Still needed from you:** this is defense-in-depth only — the real boundary is the RLS policy
-in `supabase/migrations/0001_rls_policies.sql`, **which is not yet applied to your live
-database**. Apply it (see `supabase/README.md`) to actually close this.
+**Live RLS applied 2026-09-19** (`0001_rls_policies.sql`): owner-only `*_own` policies after
+dropping the old live names. This is now enforced server-side.
 
 ### 2. 🟢 HIGH — Cross-user verse highlight exposure, undisclosed
 **Files:** `lib/services/verse_highlight_service.dart`, `lib/providers/verse_highlights_provider.dart`.
 **Decision (yours):** made private — highlights are scoped to their owner.
 **Code fix applied:** `fetchForDay(day)` now also filters `.eq('user_id', userId)` and returns
 `[]` if no user is signed in, instead of returning every user's highlights for that day.
+**Live RLS applied 2026-09-19:** old `Authenticated users can read all highlights` was dropped
+before creating `verse_highlights_select_own`. Postgres ORs policies — leaving that SELECT
+would have kept the leak.
 
 ### 3. 🟢 HIGH — Optimistic local writes with no rollback on backend failure
 **Files:** `lib/providers/book_groups_provider.dart`, `lib/providers/reading_plan_provider.dart`,
@@ -169,14 +177,12 @@ database**. Apply it (see `supabase/README.md`) to actually close this.
 error. Screens (`book_groups_screen.dart`, `settings_screen.dart`, `daily_screen.dart`) now
 catch those and show a SnackBar instead of silently reverting on next launch.
 
-### 4. 🟡 MEDIUM — Row Level Security is the entire security boundary and is unauditable here
+### 4. 🟢 MEDIUM — Row Level Security is the entire security boundary and is unauditable here
 **Fix applied:** `supabase/migrations/0001_rls_policies.sql` and `0002_chapter_progress.sql` now
 version-control the intended RLS policies for `reading_plans`, `book_groups`,
 `verse_highlights`, and the new `chapter_progress` table.
-**Still needed from you:** these files describe intended policy, written from how the Dart
-client queries each table — **verify the actual column names in the Supabase dashboard match**
-before applying, then apply them (see `supabase/README.md`). Until you do, #1's client-side
-filter is the only thing standing between a modified client and another user's data.
+**Applied live 2026-09-19.** Keep this folder matching production; add a new numbered file
+rather than editing the dashboard silently.
 
 ### 5. 🟢 LOW — No client-side validation on auth screens
 **Files:** `lib/screens/auth/sign_in_screen.dart`, `sign_up_screen.dart`.
@@ -211,8 +217,7 @@ push/PR to `main`.
 **Fix applied:** the provider now branches on `guestModeProvider` like every other piece of user
 state. New `SupabaseService.fetchChapterProgress`/`setChapterRead` methods back it for signed-in
 users, matched by the new `chapter_progress` table.
-**Still needed from you:** apply `supabase/migrations/0002_chapter_progress.sql` — the table
-doesn't exist in your live database yet, so signed-in chapter toggles will error until you do.
+**Applied live 2026-09-19**, including `chapter_progress_update_own` so upsert-on-conflict works.
 
 ### 10. 🟢 `resetToDefaults()` saved an empty row, not the defaults
 **File:** `lib/providers/book_groups_provider.dart`.
@@ -285,14 +290,12 @@ exceptions, Android manifest requests only `INTERNET` (no overreaching permissio
 
 ## What's left for you specifically
 
-1. **Apply `supabase/migrations/0001_rls_policies.sql` and `0002_chapter_progress.sql`** — see
-   `supabase/README.md`. Nothing above is actually enforced server-side until you do this, and
-   signed-in chapter-progress sync will error without the new table.
+1. ~~Apply `supabase/migrations/0001`–`0005`~~ — done live 2026-09-19.
 2. **Create a Sentry project and set `SENTRY_DSN`** whenever you're ready for crash reporting.
 3. **Schedule the deferred major dependency upgrades** (#15) as their own pass.
-4. Run the app on a real device/simulator and click through it once — none of this session's
-   fixes were verified against a running app (no Supabase credentials were available to do so).
+4. Publish `docs/policies.md` to `gamelogic.dev/bookmark/privacy-policy`.
+5. Run the app on a real device/simulator and click through it once.
 
 ---
-*Audit performed and fix pass completed 2026-09-18. Re-run this pass after major changes and
-update statuses above rather than starting a new log file.*
+*Audit performed and fix pass completed 2026-09-18. Migrations applied live 2026-09-19.
+Re-run this pass after major changes and update statuses above rather than starting a new log file.*

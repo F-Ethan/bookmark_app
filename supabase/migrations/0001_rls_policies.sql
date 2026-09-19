@@ -14,6 +14,11 @@
 -- ── reading_plans ────────────────────────────────────────────────────────────
 alter table public.reading_plans enable row level security;
 
+-- Live DB (pre-2026-09-19) used a single FOR ALL policy. Postgres ORs
+-- overlapping policies, so leaving the old name in place would mean the
+-- new owner-only policies do not actually restrict anything.
+drop policy if exists "Users manage own plan" on public.reading_plans;
+
 drop policy if exists "reading_plans_select_own" on public.reading_plans;
 create policy "reading_plans_select_own" on public.reading_plans
   for select using (auth.uid() = user_id);
@@ -32,6 +37,8 @@ create policy "reading_plans_delete_own" on public.reading_plans
 
 -- ── book_groups ──────────────────────────────────────────────────────────────
 alter table public.book_groups enable row level security;
+
+drop policy if exists "Users manage own groups" on public.book_groups;
 
 drop policy if exists "book_groups_select_own" on public.book_groups;
 create policy "book_groups_select_own" on public.book_groups
@@ -55,6 +62,13 @@ create policy "book_groups_delete_own" on public.book_groups
 -- (verse_highlight_service.dart), but that's client-side behavior — these
 -- policies are the actual enforcement boundary.
 alter table public.verse_highlights enable row level security;
+
+-- The live SELECT was "Authenticated users can read all highlights".
+-- Leaving it would OR with verse_highlights_select_own and keep the
+-- cross-user leak even after this file is applied.
+drop policy if exists "Authenticated users can read all highlights" on public.verse_highlights;
+drop policy if exists "Users can delete own highlights" on public.verse_highlights;
+drop policy if exists "Users can insert own highlights" on public.verse_highlights;
 
 drop policy if exists "verse_highlights_select_own" on public.verse_highlights;
 create policy "verse_highlights_select_own" on public.verse_highlights

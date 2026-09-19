@@ -31,6 +31,12 @@ drop policy if exists "chapter_progress_insert_own" on public.chapter_progress;
 create policy "chapter_progress_insert_own" on public.chapter_progress
   for insert with check (auth.uid() = user_id);
 
+-- Upsert-on-conflict (supabase_service.dart setChapterRead) needs UPDATE,
+-- not just INSERT — otherwise a re-check of an already-read chapter fails.
+drop policy if exists "chapter_progress_update_own" on public.chapter_progress;
+create policy "chapter_progress_update_own" on public.chapter_progress
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
 drop policy if exists "chapter_progress_delete_own" on public.chapter_progress;
 create policy "chapter_progress_delete_own" on public.chapter_progress
   for delete using (auth.uid() = user_id);
