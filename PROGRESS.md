@@ -12,6 +12,30 @@ Working notes for Bookmark. Agents must record anything discovered but left unfi
 - **Live privacy page is still generic.** `gamelogic.dev/bookmark/privacy-policy` does not yet reflect Leaderboard display names, Supporters, or verse highlights. Replace with `docs/policies.md`.
 - **Sentry is scaffolded but off** until `SENTRY_DSN` is set. Major dependency upgrades (`go_router`, `riverpod`, `flutter_local_notifications`) are still deferred — see #14 / #15 below.
 - **Patreon URL is empty.** `AppConstants.patreonUrl` stays unset until a page exists; add supporter rows in the Supabase dashboard as people sign up.
+- **`supabase/migrations/0006_supporter_note.sql` is not yet applied to the live project.** Adds the `supporter_note` table backing the Supporters screen's editable note (see 2026-09-19 leaderboard/supporter-note entry below). Apply it via the SQL editor or `supabase db push`, then edit the seeded row's `note` column from the dashboard whenever the wording needs to change — no app release required.
+
+---
+
+## 2026-09-19 — Leaderboard join prompt, supporter note moved to DB
+
+Two small requested changes:
+
+**Leaderboard opt-in prompt.** `lib/screens/leaderboard_screen.dart` now shows a banner above
+the list when the visitor isn't part of the leaderboard: guests get "create a free account",
+signed-in users who haven't opted in get "opt in from Settings" — both link to `/settings`
+(`context.push`, since Leaderboard itself is reached via `push` from Home). Driven by
+`readingPlanProvider`'s `leaderboardOptIn` + `guestModeProvider`, the same state Settings' own
+toggle already uses; banner is suppressed while the plan is still loading to avoid a flash for
+users who are actually already opted in.
+
+**Supporters "note from Ethan" moved to the database.** Previously hardcoded in
+`_DeveloperNote` (`lib/screens/supporters_screen.dart`). New singleton table
+`supabase/migrations/0006_supporter_note.sql`, same dashboard-managed pattern as `supporters`
+(0005) — publicly readable, no client write policy, edited via the Supabase table editor. The
+tappable email address and "…and I'll add you here" sign-off stay fixed in app code; only the
+lead paragraph is DB-driven. Falls back to the original wording if the fetch fails (offline, or
+the row is missing) so the screen never breaks. **Not yet applied to the live project** — see
+Known gaps above.
 
 ---
 
