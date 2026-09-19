@@ -34,8 +34,20 @@ class BibleService {
       }
       await _copyBundledAsset(translation);
     }
-    await _loadFromFile(file);
-    _loadedTranslation = translation;
+    try {
+      await _loadFromFile(file);
+      _loadedTranslation = translation;
+    } catch (e) {
+      if (translation != _bundledTranslation) {
+        // Corrupted or partially-downloaded translation file — fall back
+        // to the bundled KJV rather than crashing.
+        await initialize(_bundledTranslation);
+        return;
+      }
+      // The bundled KJV itself failed to parse — nothing we can fall back
+      // to, so let this surface to the caller.
+      rethrow;
+    }
   }
 
   /// Returns all verse texts for a chapter (chapter is 1-indexed).

@@ -1,9 +1,12 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../models/trending_highlight.dart';
 import '../models/verse_highlight.dart';
+import '../providers/book_groups_provider.dart';
 import '../providers/guest_mode_provider.dart';
 import '../providers/reading_plan_provider.dart';
 import '../providers/translation_provider.dart';
 import '../services/verse_highlight_service.dart';
+import '../utils/chapter_utils.dart';
 
 class VerseHighlightsNotifier
     extends AsyncNotifier<List<VerseHighlight>> {
@@ -88,3 +91,19 @@ final verseHighlightsProvider =
     AsyncNotifierProvider<VerseHighlightsNotifier, List<VerseHighlight>>(
   VerseHighlightsNotifier.new,
 );
+
+/// Anonymized "N people also highlighted this" data for the verses in the
+/// user's current day's reading. Empty in guest mode — local-only data never
+/// contributes to (or benefits from) the community aggregate.
+final trendingHighlightsProvider =
+    FutureProvider<List<TrendingHighlight>>((ref) async {
+  final isGuest = ref.watch(guestModeProvider);
+  if (isGuest) return [];
+
+  final plan = await ref.watch(readingPlanProvider.future);
+  if (plan == null) return [];
+
+  final groups = await ref.watch(bookGroupsProvider.future);
+  final chapters = parseChapterRefs(getChaptersForDay(plan.currentDay, groups));
+  return VerseHighlightService.fetchTrending(chapters);
+});

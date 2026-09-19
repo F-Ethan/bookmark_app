@@ -10,6 +10,10 @@ class LocalDataService {
   static const _dayKey = 'guest_plan_current_day';
   static const _dateKey = 'guest_plan_start_date';
   static const _groupsKey = 'guest_book_groups';
+  static const _currentStreakKey = 'guest_current_streak';
+  static const _longestStreakKey = 'guest_longest_streak';
+  static const _highestDayKey = 'guest_highest_day';
+  static const _lastActiveDateKey = 'guest_last_active_date';
 
   // ── Reading Plan ────────────────────────────────────────────────────────────
 
@@ -20,12 +24,18 @@ class LocalDataService {
     final day = prefs.getInt(_dayKey) ?? 1;
     final dateStr =
         prefs.getString(_dateKey) ?? DateTime.now().toIso8601String();
+    final lastActiveStr = prefs.getString(_lastActiveDateKey);
     return ReadingPlan(
       id: 'local',
       userId: 'local',
       name: name,
       currentDay: day,
       startDate: DateTime.parse(dateStr),
+      currentStreak: prefs.getInt(_currentStreakKey) ?? 0,
+      longestStreak: prefs.getInt(_longestStreakKey) ?? 0,
+      highestDayReached: prefs.getInt(_highestDayKey) ?? 0,
+      lastActiveDate:
+          lastActiveStr != null ? DateTime.parse(lastActiveStr) : null,
     );
   }
 
@@ -66,6 +76,24 @@ class LocalDataService {
     await prefs.remove(_nameKey);
     await prefs.remove(_dayKey);
     await prefs.remove(_dateKey);
+    await prefs.remove(_currentStreakKey);
+    await prefs.remove(_longestStreakKey);
+    await prefs.remove(_highestDayKey);
+    await prefs.remove(_lastActiveDateKey);
+  }
+
+  static Future<void> updateReadingStats({
+    required int currentStreak,
+    required int longestStreak,
+    required int highestDayReached,
+    required DateTime lastActiveDate,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_currentStreakKey, currentStreak);
+    await prefs.setInt(_longestStreakKey, longestStreak);
+    await prefs.setInt(_highestDayKey, highestDayReached);
+    await prefs.setString(
+        _lastActiveDateKey, lastActiveDate.toIso8601String());
   }
 
   // ── Book Groups ─────────────────────────────────────────────────────────────
@@ -86,6 +114,24 @@ class LocalDataService {
     );
   }
 
+  // ── Chapter progress ───────────────────────────────────────────────────────
+
+  static String _chapterProgressKey(int day) => 'chapter_read_day_$day';
+
+  static Future<Set<int>> fetchChapterProgress(int day) async {
+    final prefs = await SharedPreferences.getInstance();
+    final list = prefs.getStringList(_chapterProgressKey(day)) ?? [];
+    return list.map(int.parse).toSet();
+  }
+
+  static Future<void> saveChapterProgress(int day, Set<int> indices) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      _chapterProgressKey(day),
+      indices.map((i) => i.toString()).toList(),
+    );
+  }
+
   // ── Clear All ───────────────────────────────────────────────────────────────
 
   static Future<void> clearAll() async {
@@ -94,5 +140,9 @@ class LocalDataService {
     await prefs.remove(_dayKey);
     await prefs.remove(_dateKey);
     await prefs.remove(_groupsKey);
+    await prefs.remove(_currentStreakKey);
+    await prefs.remove(_longestStreakKey);
+    await prefs.remove(_highestDayKey);
+    await prefs.remove(_lastActiveDateKey);
   }
 }

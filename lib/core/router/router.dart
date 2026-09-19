@@ -14,6 +14,8 @@ import '../../screens/settings_screen.dart';
 import '../../screens/reader_screen.dart' show ReaderScreen, ReaderArgs;
 import '../../screens/bible_browse_screen.dart'
     show BibleBrowseScreen, BibleBrowseArgs;
+import '../../screens/leaderboard_screen.dart';
+import '../../screens/supporters_screen.dart';
 
 class _AppStateNotifier extends ChangeNotifier {
   _AppStateNotifier() {
@@ -23,6 +25,8 @@ class _AppStateNotifier extends ChangeNotifier {
   }
 
   late final StreamSubscription<AuthState> _subscription;
+
+  void refresh() => notifyListeners();
 
   @override
   void dispose() {
@@ -36,7 +40,7 @@ final routerProvider = Provider<GoRouter>((ref) {
   ref.onDispose(notifier.dispose);
 
   // Refresh router whenever guest mode toggles
-  ref.listen<bool>(guestModeProvider, (_, __) => notifier.notifyListeners());
+  ref.listen<bool>(guestModeProvider, (_, _) => notifier.refresh());
 
   return GoRouter(
     initialLocation: '/',
@@ -100,6 +104,14 @@ final routerProvider = Provider<GoRouter>((ref) {
                 args: args is BibleBrowseArgs ? args : null,
               );
             },
+          ),
+          GoRoute(
+            path: 'leaderboard',
+            builder: (context, state) => const LeaderboardScreen(),
+          ),
+          GoRoute(
+            path: 'supporters',
+            builder: (context, state) => const SupportersScreen(),
           ),
         ],
       ),

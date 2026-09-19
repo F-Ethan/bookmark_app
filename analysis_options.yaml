@@ -24,5 +24,14 @@ linter:
     # avoid_print: false  # Uncomment to disable the `avoid_print` rule
     # prefer_single_quotes: true  # Uncomment to enable the `prefer_single_quotes` rule
 
+    # Added 2026-09-18 as part of an enterprise-readiness pass (PROGRESS.md #16).
+    # unawaited_futures in particular would have caught the fire-and-forget
+    # writes behind PROGRESS.md #3 (edits that appeared saved but weren't).
+    avoid_print: true
+    cancel_subscriptions: true
+    close_sinks: true
+    prefer_final_locals: true
+    unawaited_futures: true
+
 # Additional information about this file can be found at
 # https://dart.dev/guides/language/analysis-options

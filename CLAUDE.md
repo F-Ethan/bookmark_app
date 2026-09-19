@@ -1,131 +1,114 @@
-# Bookmark — Agent working rules
+# CLAUDE.md
 
-Bookmark is a Flutter app for Professor Grant Horner's ten-list Bible reading system. Users track a daily ten-chapter plan, read chapters in-app, highlight verses, and customize book groups.
+Guidance for Claude Code (or any future contributor) working in this repository.
 
-This file is the source of truth for coding agents (Claude Code, Cursor, and others). Do not invent a second rules file unless the repo already uses that convention.
+## What this app is
 
-## Working process
+**Bookmark** (package name `bookmark_new`) is a Flutter Bible-reading tracker built around
+the **Horner Bible reading method**: each day the user reads one chapter from each of 10
+independent book "lists" (`lib/data/bible_sections.dart`). Because each list has a different
+total chapter count, they cycle at different rates — seeing a different book/chapter
+combination every day is **expected behavior**, not a bug (locked in by
+`test/chapter_utils_test.dart`). The app also tracks a reading **streak** and **highest day
+reached** (`lib/utils/streak_utils.dart`) — see "Community features" below.
 
-These rules are mandatory. Do not work around them.
+The app supports two usage modes:
+- **Signed-in** — data lives in Supabase (Postgres + Auth).
+- **Guest** — data lives entirely in on-device `SharedPreferences`, never leaves the phone.
 
-1. **Never work or push to `main`.** Do not commit on `main`, rebase onto `main` in place, or push to `origin/main`. Create a feature branch first (`git checkout -b …` from an up-to-date `main`).
-2. **Every new feature is a branch + pull request.** Bug fixes, refactors, and docs changes follow the same path. Do not land work by committing directly to `main` or `dev`.
-3. **Document out-of-scope issues explicitly.** If you discover a bug, stale test, missing migration, or incomplete feature that is not part of the current task, add it to the **Known gaps** section in `PROGRESS.md`. Do not silently ignore it, and do not expand scope to fix it unless the user asked.
-4. **Shipped features use real backend and device storage.** Signed-in flows must read and write Supabase (Auth, Postgres, Storage). Guest and device-preference flows must use real SharedPreferences / on-device files. Never ship mock, fixture, or hardcoded sample data as the live data source. Mocks and `SharedPreferences.setMockInitialValues` are fine in `test/` only.
+## Architecture
 
-## Stack
+- **State management**: `flutter_riverpod` (2.x). Providers live in `lib/providers/`, almost
+  all as `AsyncNotifier` subclasses that branch on `guestModeProvider` to pick a backend.
+- **Routing**: `go_router`, single source of truth in `lib/core/router/router.dart`. Auth
+  gating happens in the `redirect:` callback (checks `Supabase.instance.client.auth.currentUser`
+  and `guestModeProvider`), not per-screen.
+- **Backend**: Supabase. All Postgres access is centralized in
+  `lib/services/supabase_service.dart` (reading plans, book groups) and
+  `lib/services/verse_highlight_service.dart` (highlights) — both static-method service
+  classes, no repository/DI layer.
+- **Local storage**: `lib/services/local_data_service.dart` mirrors `SupabaseService`'s API
+  for guest mode. `lib/services/shared_prefs_service.dart` is scoped to device-local
+  notification prefs only.
+- **Bible text**: a single bundled KJV JSON asset (`assets/bibles/en_kjv.json`, ~4.3MB) is
+  parsed into memory at startup by `lib/services/bible_service.dart`.
 
-| Layer | Choice |
-| --- | --- |
-| App | Flutter (Dart SDK `^3.9.2`), package name `bookmark_new` |
-| State | Riverpod (`flutter_riverpod`) — `Notifier` / `AsyncNotifier` |
-| Routing | `go_router` via `routerProvider` |
-| Auth + cloud DB | Supabase (`supabase_flutter`) — email/password Auth, Postgres, Storage |
-| Guest / device prefs | `shared_preferences` |
-| HTTP | `dio` (Bible translation downloads) |
-| Notifications | `flutter_local_notifications` + `timezone` |
-| Fonts | `google_fonts` (reader appearance) |
-| UI | Material 3, tokens in `lib/core/theme/app_theme.dart` |
+## The dual-mode storage pattern — follow it exactly
 
-Platform folders (`android/`, `ios/`, `macos/`, `linux/`, `windows/`, `web/`) are the standard Flutter embeddings. Daily development has been iOS-first; keep Android and other targets building when you touch platform code.
+Every provider that touches user data (`reading_plan_provider.dart`,
+`book_groups_provider.dart`, `chapter_progress_provider.dart`) follows this shape:
 
-## Layout
-
-```
-lib/
-  main.dart                 # Supabase + notifications + BibleService init, ProviderScope
-  core/
-    constants/              # dart-define Supabase URL / anon key
-    router/router.dart      # auth/guest redirects and routes
-    theme/app_theme.dart
-    utils/supabase_error.dart
-  data/bible_sections.dart  # Horner lists, ordered lists, allBibleBooks
-  models/                   # ReadingPlan, BibleGroup/BibleBook, VerseHighlight
-  providers/                # Riverpod notifiers (auth, plan, groups, highlights, …)
-  screens/                  # UI, including screens/auth/
-  services/                 # Supabase, local guest storage, Bible text, highlights, notifications
-  utils/chapter_utils.dart  # Day → chapter resolution for a plan
-assets/bibles/en_kjv.json   # Bundled KJV (copied to app documents on first load)
-test/                       # flutter_test only
+```dart
+if (ref.read(guestModeProvider)) {
+  await LocalDataService.someMethod(...);
+} else {
+  await SupabaseService.someMethod(...);
+}
 ```
 
-Routes (see `lib/core/router/router.dart`):
+**When adding any new piece of user-facing state, both branches must be implemented and
+kept in sync.** Mutating methods should also roll `state` back to its pre-edit value and
+rethrow if the persistence call fails (see `book_groups_provider.dart`'s `_applyAndSave` for
+the pattern) — otherwise the UI can show an edit as saved when it wasn't. See `PROGRESS.md`
+#3 for why this matters.
 
-| Path | Screen |
-| --- | --- |
-| `/sign-in`, `/sign-up` | Auth |
-| `/onboarding` | First-time plan setup |
-| `/` | Home |
-| `/daily` | Today's (and nearby) readings |
-| `/bookgroups` | Edit Horner lists |
-| `/settings` | Profile, appearance, translation, notifications, account |
-| `/reader` | In-app chapter reader (`ReaderArgs` via `state.extra`) |
-| `/bible` | Free-read book/chapter picker |
+## Security boundary: RLS, not the client
 
-Unauthenticated users are redirected to `/sign-in` unless they entered guest mode. Logged-in users are kept off the auth screens. Guests may open sign-up to create an account.
+The Supabase anon key in `app_constants.dart` is public by design — **every** access-control
+decision (who can read/write which row) must be enforced by Postgres Row Level Security
+policies, not by the client only sending scoped queries. Those policies are version-controlled
+in `supabase/migrations/` — read `supabase/README.md` before changing any table's shape or
+assuming a query is "private" just because the Dart code filters it. If you add a new table
+that stores per-user data, add an RLS migration for it in the same PR.
 
-## Data layer
+**Anonymized aggregate pattern**: when a feature needs to show something derived from *all*
+users' data (not just the caller's own), don't relax RLS on the underlying table — write a
+`SECURITY DEFINER` Postgres function that aggregates internally but only ever returns the
+specific, non-identifying fields the feature needs. Two examples to copy from:
+`get_trending_highlights` (`0003_trending_highlights.sql`, verse highlight counts) and
+`get_leaderboard` (`0004_reading_stats.sql`, opt-in streak rankings) — both return counts/opted-
+in display data only, never a `user_id`, real name, or email.
 
-Two persistence paths. Providers choose based on `guestModeProvider` and `currentUserProvider`.
+## Community features
 
-### Signed-in (Supabase)
+`lib/screens/leaderboard_screen.dart` and `lib/screens/supporters_screen.dart` are opt-in/
+public-facing: the leaderboard only ever shows what a user explicitly opted in to share (a
+chosen `leaderboard_display_name`, kept separate from the private `name` field, plus streak
+stats) via `get_leaderboard`. Supporters is a read-only credit list — that table has no client
+write policy at all; rows are added by hand via the Supabase dashboard. Both are documented in
+`PROGRESS.md`'s 2026-09-19 entry, along with the `docs/policies.md` draft that's meant to be
+handed off to the user's separate `gamelogic` repo for publishing at
+`gamelogic.dev/bookmark/privacy-policy` — don't try to host it from this repo. As of 2026-09-19
+the live page there is a generic/boilerplate policy that doesn't yet reflect this app's actual
+Leaderboard/Supporters/highlights content — see `PROGRESS.md`'s 2026-09-19 entry.
 
-Use `SupabaseService` and `VerseHighlightService` (non-local methods). Tables in use:
-
-- `reading_plans` — one plan per user (`name`, `current_day`, `start_date`)
-- `book_groups` — ordered groups; `books` stored as JSON
-- `verse_highlights` — saved verses for a reading day
-
-Also used: Supabase Auth, RPC `delete_user`, and public Storage bucket `bibles` for optional translation JSON (e.g. BBE).
-
-Do not bypass these services with inline client calls in widgets except for Auth (`signInWithPassword`, `signUp`) and the Storage download URL already built in `BibleService`.
-
-### Guest mode (on device)
-
-Use `LocalDataService` and `VerseHighlightService` local methods. Data lives in SharedPreferences (`guest_plan_*`, `guest_book_groups`, `guest_verse_highlights`). Guest mode itself is the `guest_mode` bool.
-
-### Device-local even when signed in
-
-These are not cloud-backed today. Keep them on SharedPreferences unless the task is specifically to sync them:
-
-- Appearance (`appearance_*`)
-- Selected translation (`bible_translation`)
-- Per-day chapter-read ticks (`chapter_read_day_*`)
-- Notification enablement and time
-
-### Defaults vs live data
-
-`hornerBookGroups`, `orderedBookGroups`, `defaultBookGroups`, and `allBibleBooks` in `lib/data/bible_sections.dart` are **seed/fallback lists**, not a live user database. Use them to initialize onboarding or to fill an empty fetch. After the user has groups, persist and reload from Supabase (signed-in) or SharedPreferences (guest).
-
-Bundled `assets/bibles/en_kjv.json` is the real KJV text. Extra translations are downloaded to the app documents directory through `BibleService`, not fabricated in UI.
-
-`AppConstants.supabaseUrl` / `supabaseAnonKey` come from `--dart-define` (`SUPABASE_URL`, `SUPABASE_ANON_KEY`). Local launches use `--dart-define-from-file=dart_defines/dev.json` (gitignored). Never commit that file or other secrets.
-
-## Flutter conventions
-
-- Screens are `ConsumerWidget` / `ConsumerStatefulWidget`. Watch providers; do not cache Supabase rows in widget fields as the source of truth.
-- Theme: reuse `AppTheme` tokens. Reader typography comes from `appearanceProvider`, not ad-hoc `TextStyle`s.
-- Handle `isSupabasePaused` on plan/group loads the same way Home and Daily already do (`SupabasePausedScreen`).
-- Routing: `context.go` for top-level tabs/flows, `context.push` when a back stack is needed (`/bible`, `/reader`). Pass reader/browse state through `extra` typed args, not query strings.
-- Keep guest and signed-in writes on their existing service split. Do not write guest data into Supabase, or signed-in plan data only into prefs, unless you are implementing an explicit migration the user asked for.
-
-## Tests
-
-- Run `flutter test` and `flutter analyze` for Dart changes.
-- Mocks belong in `test/` only.
-- `test/widget_test.dart` is currently stale (see `PROGRESS.md`). Update or replace tests that you touch; do not "fix" them by pointing the app at fixture data.
-
-## Commands
+## Dev setup
 
 ```bash
-flutter pub get
-flutter analyze
-flutter test
+flutter pub get --dart-define-from-file=dart_defines/dev.json
 flutter run --dart-define-from-file=dart_defines/dev.json
 ```
 
-iOS simulator / Xcode workflows are recorded in `.claude/settings.json` from local Claude Code use. Prefer `flutter` commands unless you are debugging a native build.
+`dart_defines/dev.json` holds `SUPABASE_URL` / `SUPABASE_ANON_KEY` / `SENTRY_DSN` and is
+gitignored — ask the project owner for a copy rather than recreating it. Do not remove the
+gitignore entry. Note `lib/core/constants/app_constants.dart` also bakes the Supabase values
+in as `String.fromEnvironment` **default values**, so they end up in every committed build
+regardless of the dart-define file — this is normal for a Supabase anon/publishable key
+(app security relies on server-side Row Level Security, not on hiding this key), but never
+add a *service-role* or other privileged key this way. `SENTRY_DSN` defaults to empty, which
+disables Sentry entirely — see `PROGRESS.md` #14.
 
-## Out of scope
+## CI and tests
 
-If work is blocked or you find something that is not the assigned task, record it under **Known gaps** in `PROGRESS.md` and stay on the requested change.
+`.github/workflows/ci.yml` runs `flutter analyze` and `flutter test` on every push/PR to
+`main`. `flutter analyze` is clean and the test suite (`test/chapter_utils_test.dart`,
+`test/book_groups_provider_test.dart`, `test/streak_utils_test.dart`, `test/widget_test.dart`)
+passes — keep both green; don't merge past a red CI run.
+
+## Full audit
+
+See `PROGRESS.md` for the complete security and code-quality audit and fix log (dated
+2026-09-18). Most findings were fixed in that pass; a few need action outside this repo —
+most importantly, **the RLS migrations in `supabase/migrations/` are not yet applied to the
+live database** (see `supabase/README.md`). Until they are, the client-side ownership checks
+in `verse_highlight_service.dart` are defense-in-depth only, not the real security boundary.

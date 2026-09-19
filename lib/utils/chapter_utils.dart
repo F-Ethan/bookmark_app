@@ -38,6 +38,18 @@ List<String> getChaptersForDay(int day, List<BibleGroup> groups) {
   return chapters;
 }
 
+/// Parses a formatted chapter string like "1 Corinthians 12" into its book
+/// name and chapter number.
+(String book, int chapter) parseChapterRef(String chapterRef) {
+  final parts = chapterRef.trim().split(' ');
+  final chapter = int.tryParse(parts.last) ?? 1;
+  final book = parts.sublist(0, parts.length - 1).join(' ');
+  return (book, chapter);
+}
+
+List<(String book, int chapter)> parseChapterRefs(List<String> chapters) =>
+    chapters.map(parseChapterRef).toList();
+
 
 
 // import '../data/bible_sections.dart';

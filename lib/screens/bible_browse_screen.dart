@@ -119,6 +119,7 @@ class _BibleBrowseScreenState extends ConsumerState<BibleBrowseScreen> {
         title: const Text('Bible'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_rounded),
+          tooltip: 'Back',
           onPressed: () => context.go('/'),
         ),
       ),

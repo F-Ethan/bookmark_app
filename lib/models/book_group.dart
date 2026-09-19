@@ -11,8 +11,10 @@ class BibleGroup {
 
   factory BibleGroup.fromJson(Map<String, dynamic> json) {
     return BibleGroup(
-      name: json['name'],
-      books: (json['books'] as List).map((b) => BibleBook.fromJson(b)).toList(),
+      name: json['name'] as String,
+      books: (json['books'] as List)
+          .map((b) => BibleBook.fromJson(b as Map<String, dynamic>))
+          .toList(),
     );
   }
 }
@@ -33,9 +35,9 @@ class BibleBook {
 
   factory BibleBook.fromJson(Map<String, dynamic> json) {
     return BibleBook(
-      name: json['name'],
-      chapters: json['chapters'],
-      singleChapter: json['singleChapter'],
+      name: json['name'] as String,
+      chapters: json['chapters'] as int?,
+      singleChapter: json['singleChapter'] as int?,
     );
   }
 }

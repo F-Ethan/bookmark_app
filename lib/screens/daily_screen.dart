@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -11,6 +12,7 @@ import '../providers/book_groups_provider.dart';
 import '../providers/chapter_progress_provider.dart';
 import '../providers/verse_highlights_provider.dart';
 import '../services/bible_service.dart';
+import '../services/review_prompt_service.dart';
 import '../utils/chapter_utils.dart';
 import 'reader_screen.dart' show ReaderArgs;
 
@@ -50,8 +52,22 @@ class _DailyScreenState extends ConsumerState<DailyScreen> {
 
   Future<void> _markAsRead({required int displayDay, required int currentDay}) async {
     if (displayDay < currentDay) return; // already read
-    await ref.read(readingPlanProvider.notifier).setCurrentDay(displayDay + 1);
+    int newStreak;
+    try {
+      newStreak = await ref
+          .read(readingPlanProvider.notifier)
+          .recordDayCompleted(displayDay);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Could not save progress. Check your connection.')),
+      );
+      return;
+    }
+    if (!mounted) return;
     setState(() => _viewedDay = null); // snap back to new currentDay
+    unawaited(ReviewPromptService.maybeShowPrompt(newStreak));
   }
 
   DateTime _getDateForDay(int day, DateTime startDate) =>
@@ -67,7 +83,10 @@ class _DailyScreenState extends ConsumerState<DailyScreen> {
           const Scaffold(body: Center(child: CircularProgressIndicator())),
       error: (e, _) => isSupabasePaused(e)
           ? const SupabasePausedScreen()
-          : Scaffold(body: Center(child: Text('Error: $e'))),
+          : ErrorRetryView(
+              error: e,
+              onRetry: () => ref.invalidate(readingPlanProvider),
+            ),
       data: (plan) {
         if (plan == null) {
           return const Scaffold(
@@ -105,6 +124,7 @@ class _DailyScreenState extends ConsumerState<DailyScreen> {
             title: const Text('Daily Reading'),
             leading: IconButton(
               icon: const Icon(Icons.arrow_back_rounded),
+              tooltip: 'Back',
               onPressed: () => context.go('/'),
             ),
           ),
@@ -410,12 +430,7 @@ class _VerseBookmarkButton extends ConsumerWidget {
     required this.readingDay,
   });
 
-  (String, int) get _parsed {
-    final parts = chapterRef.trim().split(' ');
-    final chapter = int.tryParse(parts.last) ?? 1;
-    final book = parts.sublist(0, parts.length - 1).join(' ');
-    return (book, chapter);
-  }
+  (String, int) get _parsed => parseChapterRef(chapterRef);
 
   void _showPicker(BuildContext context, WidgetRef ref) {
     final (book, chapter) = _parsed;
@@ -555,7 +570,20 @@ class _ChapterCheckButton extends ConsumerWidget {
       constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
       tooltip: checked ? 'Mark unread' : 'Mark as read',
       onPressed: isCurrentDay
-          ? () => ref.read(chapterProgressProvider.notifier).toggle(chapterIndex)
+          ? () async {
+              try {
+                await ref
+                    .read(chapterProgressProvider.notifier)
+                    .toggle(chapterIndex);
+              } catch (_) {
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                      content: Text(
+                          'Could not save progress. Check your connection.')),
+                );
+              }
+            }
           : null,
     );
   }
