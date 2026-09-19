@@ -13,8 +13,18 @@ class SupportersScreen extends StatefulWidget {
   State<SupportersScreen> createState() => _SupportersScreenState();
 }
 
+/// Shown if the `supporter_note` row can't be fetched (offline, or the row
+/// was deleted) — same wording it was seeded with, so the note keeps making
+/// sense without a network round trip.
+const _fallbackDeveloperNote = 'Bookmark is a personal project I built and '
+    "maintain myself — thank you for using it! If you'd like to support my "
+    'work, reach out at';
+
 class _SupportersScreenState extends State<SupportersScreen> {
   late final Future<List<Supporter>> _future = SupabaseService.fetchSupporters();
+  late final Future<String> _noteFuture = SupabaseService.fetchSupporterNote()
+      .then((note) => (note == null || note.isEmpty) ? _fallbackDeveloperNote : note)
+      .catchError((_) => _fallbackDeveloperNote);
   final _emailTapRecognizer = TapGestureRecognizer()
     ..onTap = () => launchUrl(
           Uri(
@@ -45,7 +55,16 @@ class _SupportersScreenState extends State<SupportersScreen> {
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(24, 16, 24, 4),
-            child: _DeveloperNote(emailTapRecognizer: _emailTapRecognizer),
+            child: FutureBuilder<String>(
+              future: _noteFuture,
+              builder: (context, snapshot) {
+                final note = snapshot.data ?? _fallbackDeveloperNote;
+                return _DeveloperNote(
+                  note: note,
+                  emailTapRecognizer: _emailTapRecognizer,
+                );
+              },
+            ),
           ),
           Expanded(
             child: FutureBuilder<List<Supporter>>(
@@ -83,10 +102,13 @@ class _SupportersScreenState extends State<SupportersScreen> {
 
 /// A personal note from the developer — this app has no Patreon/paid tier
 /// yet, so this is currently the only way anyone finds out they *can*
-/// support it.
+/// support it. The note text itself comes from the dashboard-editable
+/// `supporter_note` table so it can be changed without an app release; the
+/// tappable email and sign-off stay fixed in the app.
 class _DeveloperNote extends StatelessWidget {
+  final String note;
   final TapGestureRecognizer emailTapRecognizer;
-  const _DeveloperNote({required this.emailTapRecognizer});
+  const _DeveloperNote({required this.note, required this.emailTapRecognizer});
 
   @override
   Widget build(BuildContext context) {
@@ -122,11 +144,7 @@ class _DeveloperNote extends StatelessWidget {
                     height: 1.5,
                   ),
               children: [
-                const TextSpan(
-                  text: 'Bookmark is a personal project I built and maintain '
-                      "myself — thank you for using it! If you'd like to "
-                      'support my work, reach out at ',
-                ),
+                TextSpan(text: '$note '),
                 TextSpan(
                   text: AppConstants.supporterContactEmail,
                   style: const TextStyle(

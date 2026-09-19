@@ -58,6 +58,11 @@ supabase db push
   sensitive data); no insert/update/delete policy for any client role, so
   entries are managed only via the Supabase dashboard table editor, by
   design (see the file's own comment).
+- `0006_supporter_note.sql` — creates the singleton `supporter_note` table
+  holding the "note from Ethan" paragraph shown at the top of the Supporters
+  screen, so it can be edited from the dashboard table editor without an app
+  release. Same publicly-readable, dashboard-managed-only pattern as
+  `supporters`.
 
 ## Keeping this in sync
 
