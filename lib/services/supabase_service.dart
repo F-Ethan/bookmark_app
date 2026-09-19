@@ -128,6 +128,17 @@ class SupabaseService {
         .toList();
   }
 
+  /// The dashboard-editable "note from Ethan" shown on the Supporters
+  /// screen — see supabase/migrations/0006_supporter_note.sql.
+  static Future<String?> fetchSupporterNote() async {
+    final data = await _client
+        .from('supporter_note')
+        .select('note')
+        .eq('id', 1)
+        .maybeSingle();
+    return data?['note'] as String?;
+  }
+
   static Future<void> deleteAccount() async {
     await _client.rpc('delete_user');
   }

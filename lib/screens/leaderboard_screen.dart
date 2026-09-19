@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../core/theme/app_theme.dart';
 import '../models/leaderboard_entry.dart';
+import '../providers/guest_mode_provider.dart';
+import '../providers/reading_plan_provider.dart';
 import '../services/supabase_service.dart';
 
 enum _LeaderboardSort { streak, highestDay }
@@ -39,6 +42,11 @@ class _LeaderboardScreenState extends ConsumerState<LeaderboardScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isGuest = ref.watch(guestModeProvider);
+    final planAsync = ref.watch(readingPlanProvider);
+    final isOptedIn = !isGuest && (planAsync.valueOrNull?.leaderboardOptIn ?? false);
+    final showJoinPrompt = isGuest || (planAsync.hasValue && !isOptedIn);
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Leaderboard'),
@@ -50,6 +58,14 @@ class _LeaderboardScreenState extends ConsumerState<LeaderboardScreen> {
       ),
       body: Column(
         children: [
+          if (showJoinPrompt)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+              child: _JoinPromptBanner(
+                isGuest: isGuest,
+                onTap: () => context.push('/settings'),
+              ),
+            ),
           Padding(
             padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
             child: Row(
@@ -115,6 +131,51 @@ class _LeaderboardScreenState extends ConsumerState<LeaderboardScreen> {
                 );
               },
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _JoinPromptBanner extends StatelessWidget {
+  final bool isGuest;
+  final VoidCallback onTap;
+
+  const _JoinPromptBanner({required this.isGuest, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppTheme.primary.withValues(alpha: 0.08),
+        border: Border.all(color: AppTheme.primary.withValues(alpha: 0.3)),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.emoji_events_rounded,
+              color: AppTheme.primary, size: 20),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              isGuest
+                  ? "You're not on the leaderboard — create a free account "
+                      'in Settings to join.'
+                  : "You're not on the leaderboard yet — opt in from "
+                      'Settings to track your streak.',
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(fontWeight: FontWeight.w600),
+            ),
+          ),
+          const SizedBox(width: 8),
+          TextButton(
+            onPressed: onTap,
+            child: const Text('Settings'),
           ),
         ],
       ),
