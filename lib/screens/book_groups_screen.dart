@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/theme/app_theme.dart';
+import '../core/utils/supabase_error.dart';
 import '../data/bible_sections.dart';
 import '../models/book_group.dart';
 import '../providers/book_groups_provider.dart';
@@ -15,7 +16,10 @@ class BookGroupsScreen extends ConsumerWidget {
     return groupsAsync.when(
       loading: () =>
           const Scaffold(body: Center(child: CircularProgressIndicator())),
-      error: (e, _) => Scaffold(body: Center(child: Text('Error: $e'))),
+      error: (e, _) => ErrorRetryView(
+        error: e,
+        onRetry: () => ref.invalidate(bookGroupsProvider),
+      ),
       data: (groups) => _BookGroupsBody(groups: groups),
     );
   }
@@ -26,10 +30,21 @@ class _BookGroupsBody extends ConsumerWidget {
 
   const _BookGroupsBody({required this.groups});
 
-  Future<void> _addGroup(WidgetRef ref) async {
-    await ref
-        .read(bookGroupsProvider.notifier)
-        .addGroup(BibleGroup(name: 'New Group', books: []));
+  void _showSaveError(BuildContext context) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+          content: Text('Could not save changes. Check your connection.')),
+    );
+  }
+
+  Future<void> _addGroup(BuildContext context, WidgetRef ref) async {
+    try {
+      await ref
+          .read(bookGroupsProvider.notifier)
+          .addGroup(BibleGroup(name: 'New Group', books: []));
+    } catch (_) {
+      if (context.mounted) _showSaveError(context);
+    }
   }
 
   Future<void> _removeGroup(
@@ -56,7 +71,11 @@ class _BookGroupsBody extends ConsumerWidget {
     );
 
     if (confirmed == true) {
-      await ref.read(bookGroupsProvider.notifier).removeGroup(index);
+      try {
+        await ref.read(bookGroupsProvider.notifier).removeGroup(index);
+      } catch (_) {
+        if (context.mounted) _showSaveError(context);
+      }
     }
   }
 
@@ -123,18 +142,23 @@ class _BookGroupsBody extends ConsumerWidget {
               child: const Text('Cancel'),
             ),
             FilledButton(
-              onPressed: () {
+              onPressed: () async {
                 final updatedBooks = allBibleBooks
                     .where((b) => selectedBooks.contains(b.name))
                     .toList();
-                ref.read(bookGroupsProvider.notifier).updateGroup(
-                      index,
-                      BibleGroup(
-                        name: nameController.text,
-                        books: updatedBooks,
-                      ),
-                    );
-                Navigator.pop(context);
+                final navigator = Navigator.of(context);
+                try {
+                  await ref.read(bookGroupsProvider.notifier).updateGroup(
+                        index,
+                        BibleGroup(
+                          name: nameController.text,
+                          books: updatedBooks,
+                        ),
+                      );
+                } catch (_) {
+                  if (context.mounted) _showSaveError(context);
+                }
+                navigator.pop();
               },
               child: const Text('Save'),
             ),
@@ -155,7 +179,7 @@ class _BookGroupsBody extends ConsumerWidget {
             child: IconButton(
               icon: const Icon(Icons.add_rounded),
               tooltip: 'Add Group',
-              onPressed: () => _addGroup(ref),
+              onPressed: () => _addGroup(context, ref),
             ),
           ),
         ],

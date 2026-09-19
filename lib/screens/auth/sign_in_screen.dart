@@ -20,7 +20,23 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
   bool _loading = false;
   String? _error;
 
+  static final _emailRegex = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
+
+  String? _validate() {
+    final email = _emailController.text.trim();
+    if (email.isEmpty) return 'Enter your email';
+    if (!_emailRegex.hasMatch(email)) return 'Enter a valid email address';
+    if (_passwordController.text.isEmpty) return 'Enter your password';
+    return null;
+  }
+
   Future<void> _signIn() async {
+    final validationError = _validate();
+    if (validationError != null) {
+      setState(() => _error = validationError);
+      return;
+    }
+
     setState(() {
       _loading = true;
       _error = null;

@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
+import '../../core/constants/app_constants.dart';
 import '../../core/theme/app_theme.dart';
 
 class SignUpScreen extends StatefulWidget {
@@ -16,8 +19,33 @@ class _SignUpScreenState extends State<SignUpScreen> {
   bool _loading = false;
   bool _confirmationSent = false;
   String? _error;
+  final _termsTapRecognizer = TapGestureRecognizer()
+    ..onTap = () => launchUrl(
+          Uri.parse(AppConstants.policiesUrl),
+          mode: LaunchMode.externalApplication,
+        );
+
+  static final _emailRegex = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
+
+  String? _validate() {
+    final email = _emailController.text.trim();
+    if (email.isEmpty) return 'Enter your email';
+    if (!_emailRegex.hasMatch(email)) return 'Enter a valid email address';
+    final password = _passwordController.text;
+    if (password.isEmpty) return 'Enter a password';
+    if (password.length < 6) {
+      return 'Password must be at least 6 characters';
+    }
+    return null;
+  }
 
   Future<void> _signUp() async {
+    final validationError = _validate();
+    if (validationError != null) {
+      setState(() => _error = validationError);
+      return;
+    }
+
     setState(() {
       _loading = true;
       _error = null;
@@ -47,6 +75,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
+    _termsTapRecognizer.dispose();
     super.dispose();
   }
 
@@ -170,6 +199,28 @@ class _SignUpScreenState extends State<SignUpScreen> {
                 obscureText: true,
                 decoration: const InputDecoration(labelText: 'Password'),
                 onSubmitted: (_) => _signUp(),
+              ),
+              const SizedBox(height: 16),
+              Text.rich(
+                TextSpan(
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodySmall
+                      ?.copyWith(color: AppTheme.textSecondary, height: 1.4),
+                  children: [
+                    const TextSpan(text: 'By creating an account, you agree to our '),
+                    TextSpan(
+                      text: 'Terms & Privacy Policy',
+                      style: const TextStyle(
+                        color: AppTheme.primary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      recognizer: _termsTapRecognizer,
+                    ),
+                    const TextSpan(text: '.'),
+                  ],
+                ),
+                textAlign: TextAlign.center,
               ),
               if (_error != null) ...[
                 const SizedBox(height: 12),

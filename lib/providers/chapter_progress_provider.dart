@@ -1,5 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import '../services/local_data_service.dart';
+import '../services/supabase_service.dart';
+import 'guest_mode_provider.dart';
 import 'reading_plan_provider.dart';
 
 class ChapterProgressNotifier extends AsyncNotifier<Set<int>> {
@@ -7,45 +9,51 @@ class ChapterProgressNotifier extends AsyncNotifier<Set<int>> {
   Future<Set<int>> build() async {
     final plan = await ref.watch(readingPlanProvider.future);
     if (plan == null) return {};
-    return _load(plan.currentDay);
+    final isGuest = ref.watch(guestModeProvider);
+    return isGuest
+        ? LocalDataService.fetchChapterProgress(plan.currentDay)
+        : SupabaseService.fetchChapterProgress(plan.currentDay);
   }
 
-  static Future<Set<int>> _load(int day) async {
-    final prefs = await SharedPreferences.getInstance();
-    final list = prefs.getStringList('chapter_read_day_$day') ?? [];
-    return list.map(int.parse).toSet();
+  Future<void> _setRead(int day, int chapterIndex, bool read) async {
+    if (ref.read(guestModeProvider)) {
+      final updated = Set<int>.from(state.valueOrNull ?? {});
+      read ? updated.add(chapterIndex) : updated.remove(chapterIndex);
+      await LocalDataService.saveChapterProgress(day, updated);
+    } else {
+      await SupabaseService.setChapterRead(day, chapterIndex, read);
+    }
   }
 
   Future<void> toggle(int chapterIndex) async {
     final plan = ref.read(readingPlanProvider).valueOrNull;
     if (plan == null) return;
-    final current = state.valueOrNull ?? {};
-    final updated = Set<int>.from(current);
-    if (updated.contains(chapterIndex)) {
-      updated.remove(chapterIndex);
-    } else {
-      updated.add(chapterIndex);
-    }
+    final previous = state.valueOrNull ?? {};
+    final nowRead = !previous.contains(chapterIndex);
+    final updated = Set<int>.from(previous);
+    nowRead ? updated.add(chapterIndex) : updated.remove(chapterIndex);
     state = AsyncData(updated);
-    await _save(plan.currentDay, updated);
+    try {
+      await _setRead(plan.currentDay, chapterIndex, nowRead);
+    } catch (_) {
+      state = AsyncData(previous);
+      rethrow;
+    }
   }
 
   Future<void> markRead(int chapterIndex) async {
     final plan = ref.read(readingPlanProvider).valueOrNull;
     if (plan == null) return;
-    final current = state.valueOrNull ?? {};
-    if (current.contains(chapterIndex)) return;
-    final updated = {...current, chapterIndex};
+    final previous = state.valueOrNull ?? {};
+    if (previous.contains(chapterIndex)) return;
+    final updated = {...previous, chapterIndex};
     state = AsyncData(updated);
-    await _save(plan.currentDay, updated);
-  }
-
-  static Future<void> _save(int day, Set<int> indices) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(
-      'chapter_read_day_$day',
-      indices.map((i) => i.toString()).toList(),
-    );
+    try {
+      await _setRead(plan.currentDay, chapterIndex, true);
+    } catch (_) {
+      state = AsyncData(previous);
+      rethrow;
+    }
   }
 
   bool isRead(int chapterIndex) =>

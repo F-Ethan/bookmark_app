@@ -45,7 +45,9 @@ lib/
   screens/                  # UI, including screens/auth/
   services/                 # Supabase, local guest storage, Bible text, highlights, notifications
   utils/chapter_utils.dart  # Day → chapter resolution for a plan
+  utils/streak_utils.dart   # Calendar-day streak / highest-day math
 assets/bibles/en_kjv.json   # Bundled KJV (copied to app documents on first load)
+supabase/migrations/        # RLS + schema matching live Supabase (0001–0005 applied 2026-09-19)
 test/                       # flutter_test only
 ```
 
@@ -61,6 +63,8 @@ Routes (see `lib/core/router/router.dart`):
 | `/settings` | Profile, appearance, translation, notifications, account |
 | `/reader` | In-app chapter reader (`ReaderArgs` via `state.extra`) |
 | `/bible` | Free-read book/chapter picker |
+| `/leaderboard` | Opt-in streak / highest-day leaderboard |
+| `/supporters` | Patreon backer credits (dashboard-managed rows) |
 
 Unauthenticated users are redirected to `/sign-in` unless they entered guest mode. Logged-in users are kept off the auth screens. Guests may open sign-up to create an account.
 
@@ -72,13 +76,17 @@ Two persistence paths. Providers choose based on `guestModeProvider` and `curren
 
 Use `SupabaseService` and `VerseHighlightService` (non-local methods). Tables in use:
 
-- `reading_plans` — one plan per user (`name`, `current_day`, `start_date`)
+- `reading_plans` — one plan per user (`name`, `current_day`, `start_date`, plus streak / leaderboard columns from `0004_reading_stats.sql`)
 - `book_groups` — ordered groups; `books` stored as JSON
-- `verse_highlights` — saved verses for a reading day
+- `verse_highlights` — saved verses for a reading day (owner-only RLS; trending counts go through `get_trending_highlights`)
+- `chapter_progress` — per-day chapter-read ticks for signed-in users
+- `supporters` — public read-only credit list (no client write policy)
 
-Also used: Supabase Auth, RPC `delete_user`, and public Storage bucket `bibles` for optional translation JSON (e.g. BBE).
+Also used: Supabase Auth, RPC `delete_user`, RPCs `get_trending_highlights` / `get_leaderboard`, and public Storage bucket `bibles` for optional translation JSON (e.g. BBE).
 
 Do not bypass these services with inline client calls in widgets except for Auth (`signInWithPassword`, `signUp`) and the Storage download URL already built in `BibleService`.
+
+RLS is the security boundary (the anon key is public). Policies live in `supabase/migrations/`. If you add a per-user table, add an owner-only RLS migration in the same PR. For aggregates across users, use a `SECURITY DEFINER` function that never returns `user_id` (see `get_trending_highlights` and `get_leaderboard`).
 
 ### Guest mode (on device)
 
@@ -90,8 +98,10 @@ These are not cloud-backed today. Keep them on SharedPreferences unless the task
 
 - Appearance (`appearance_*`)
 - Selected translation (`bible_translation`)
-- Per-day chapter-read ticks (`chapter_read_day_*`)
 - Notification enablement and time
+- Review-prompt throttle
+
+Signed-in chapter-read ticks go to `chapter_progress` in Supabase. Guest ticks stay in `chapter_read_day_*`.
 
 ### Defaults vs live data
 
@@ -113,7 +123,7 @@ Bundled `assets/bibles/en_kjv.json` is the real KJV text. Extra translations are
 
 - Run `flutter test` and `flutter analyze` for Dart changes.
 - Mocks belong in `test/` only.
-- `test/widget_test.dart` is currently stale (see `PROGRESS.md`). Update or replace tests that you touch; do not "fix" them by pointing the app at fixture data.
+- Keep `test/chapter_utils_test.dart`, `test/book_groups_provider_test.dart`, `test/streak_utils_test.dart`, and `test/widget_test.dart` green. Update or replace tests that you touch; do not "fix" them by pointing the app at fixture data.
 
 ## Commands
 

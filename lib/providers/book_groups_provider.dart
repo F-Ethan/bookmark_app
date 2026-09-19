@@ -25,49 +25,62 @@ class BookGroupsNotifier extends AsyncNotifier<List<BibleGroup>> {
     }
   }
 
+  /// Applies [next] optimistically, persists it, and rolls back to
+  /// [previous] (rethrowing) if the write fails — so a dropped connection
+  /// or rejected write doesn't leave the UI showing an edit that was never
+  /// actually saved.
+  Future<void> _applyAndSave(
+    List<BibleGroup> previous,
+    List<BibleGroup> next,
+  ) async {
+    state = AsyncData(next);
+    try {
+      await _save(next);
+    } catch (_) {
+      state = AsyncData(previous);
+      rethrow;
+    }
+  }
+
   Future<void> addGroup(BibleGroup group) async {
-    final current = List<BibleGroup>.from(state.valueOrNull ?? []);
-    current.add(group);
-    state = AsyncData(current);
-    await _save(current);
+    final previous = List<BibleGroup>.from(state.valueOrNull ?? []);
+    final next = List<BibleGroup>.from(previous)..add(group);
+    await _applyAndSave(previous, next);
   }
 
   Future<void> updateGroup(int index, BibleGroup group) async {
-    final current = List<BibleGroup>.from(state.valueOrNull ?? []);
-    current[index] = group;
-    state = AsyncData(current);
-    await _save(current);
+    final previous = List<BibleGroup>.from(state.valueOrNull ?? []);
+    final next = List<BibleGroup>.from(previous)..[index] = group;
+    await _applyAndSave(previous, next);
   }
 
   Future<void> removeGroup(int index) async {
-    final current = List<BibleGroup>.from(state.valueOrNull ?? []);
-    current.removeAt(index);
-    state = AsyncData(current);
-    await _save(current);
+    final previous = List<BibleGroup>.from(state.valueOrNull ?? []);
+    final next = List<BibleGroup>.from(previous)..removeAt(index);
+    await _applyAndSave(previous, next);
   }
 
   Future<void> reorderGroups(int oldIndex, int newIndex) async {
-    final current = List<BibleGroup>.from(state.valueOrNull ?? []);
+    final previous = List<BibleGroup>.from(state.valueOrNull ?? []);
     if (newIndex > oldIndex) newIndex--;
-    final item = current.removeAt(oldIndex);
-    current.insert(newIndex, item);
-    state = AsyncData(current);
-    await _save(current);
+    final next = List<BibleGroup>.from(previous);
+    final item = next.removeAt(oldIndex);
+    next.insert(newIndex, item);
+    await _applyAndSave(previous, next);
   }
 
   Future<void> setGroups(List<BibleGroup> groups) async {
-    state = AsyncData(List.from(groups));
-    await _save(groups);
+    final previous = List<BibleGroup>.from(state.valueOrNull ?? []);
+    await _applyAndSave(previous, List<BibleGroup>.from(groups));
   }
 
   Future<void> resetToDefaults() async {
+    final previous = List<BibleGroup>.from(state.valueOrNull ?? []);
     final defaults = List<BibleGroup>.from(defaultBookGroups);
-    state = AsyncData(defaults);
-    if (ref.read(guestModeProvider)) {
-      await LocalDataService.saveBookGroups(defaults);
-    } else {
-      await SupabaseService.saveBookGroups([]);
-    }
+    // Always persist the actual defaults (not an empty row) so the stored
+    // data reflects what's displayed rather than relying on build()'s
+    // empty-list fallback to infer it.
+    await _applyAndSave(previous, defaults);
   }
 }
 

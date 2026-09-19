@@ -17,6 +17,55 @@ bool isSupabasePaused(Object error) {
   return false;
 }
 
+/// Full-page error with a retry action, for use in an AsyncValue.error branch.
+/// Standardizes what was previously a bare `Text('Error: $e')` scattered
+/// across screens, with no way for the user to recover without restarting
+/// the app.
+class ErrorRetryView extends StatelessWidget {
+  final Object error;
+  final VoidCallback onRetry;
+
+  const ErrorRetryView({super.key, required this.error, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.error_outline_rounded,
+                    size: 40, color: AppTheme.danger),
+                const SizedBox(height: 16),
+                Text(
+                  'Something went wrong',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  error.toString(),
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: AppTheme.textSecondary,
+                      ),
+                ),
+                const SizedBox(height: 20),
+                FilledButton(onPressed: onRetry, child: const Text('Retry')),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Full-page error shown when the Supabase project is archived due to inactivity.
 class SupabasePausedScreen extends StatelessWidget {
   const SupabasePausedScreen({super.key});

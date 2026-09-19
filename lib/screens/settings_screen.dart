@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../core/constants/app_constants.dart';
 import '../core/theme/app_theme.dart';
 import '../core/utils/supabase_error.dart';
 import '../providers/appearance_provider.dart';
@@ -25,9 +26,15 @@ class SettingsScreen extends ConsumerStatefulWidget {
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   final _nameController = TextEditingController();
   final _dayController = TextEditingController();
+  final _displayNameController = TextEditingController();
   bool _notificationsEnabled = false;
   TimeOfDay? _notificationTime;
   bool _prefsLoaded = false;
+  bool _profileControllersInitialized = false;
+  bool _leaderboardOptIn = false;
+  bool _leaderboardControllersInitialized = false;
+  bool _savingLeaderboard = false;
+  String? _leaderboardError;
 
   @override
   void initState() {
@@ -73,9 +80,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final name = _nameController.text.trim();
     final day = int.tryParse(_dayController.text.trim()) ?? plan.currentDay;
 
-    await ref
-        .read(readingPlanProvider.notifier)
-        .updateProfile(name: name, currentDay: day);
+    try {
+      await ref
+          .read(readingPlanProvider.notifier)
+          .updateProfile(name: name, currentDay: day);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Could not save changes. Check your connection.')),
+      );
+      return;
+    }
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('enable_notifications', _notificationsEnabled);
@@ -96,6 +112,35 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     ScaffoldMessenger.of(context)
         .showSnackBar(const SnackBar(content: Text('Settings saved!')));
     Navigator.pop(context);
+  }
+
+  Future<void> _saveLeaderboardSettings() async {
+    final displayName = _displayNameController.text.trim();
+    if (_leaderboardOptIn && displayName.isEmpty) {
+      setState(() =>
+          _leaderboardError = 'Choose a display name to join the leaderboard.');
+      return;
+    }
+    setState(() {
+      _savingLeaderboard = true;
+      _leaderboardError = null;
+    });
+    try {
+      await ref.read(readingPlanProvider.notifier).updateLeaderboardOptIn(
+            optIn: _leaderboardOptIn,
+            displayName: displayName.isEmpty ? null : displayName,
+          );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Leaderboard settings saved!')),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      setState(() =>
+          _leaderboardError = 'Could not save. Check your connection.');
+    } finally {
+      if (mounted) setState(() => _savingLeaderboard = false);
+    }
   }
 
   Future<void> _toggleNotifications(bool? value) async {
@@ -146,8 +191,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
     if (!mounted) return;
     if (confirmed == true) {
-      await ref.read(bookGroupsProvider.notifier).resetToDefaults();
-      await ref.read(readingPlanProvider.notifier).deletePlan();
+      try {
+        await ref.read(bookGroupsProvider.notifier).resetToDefaults();
+        await ref.read(readingPlanProvider.notifier).deletePlan();
+      } catch (_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content:
+                  Text('Could not complete reset. Check your connection.')),
+        );
+        return;
+      }
       if (!mounted) return;
       context.go('/onboarding');
     }
@@ -226,6 +281,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   void dispose() {
     _nameController.dispose();
     _dayController.dispose();
+    _displayNameController.dispose();
     super.dispose();
   }
 
@@ -238,18 +294,28 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           const Scaffold(body: Center(child: CircularProgressIndicator())),
       error: (e, _) => isSupabasePaused(e)
           ? const SupabasePausedScreen()
-          : Scaffold(body: Center(child: Text('Error: $e'))),
+          : ErrorRetryView(
+              error: e,
+              onRetry: () => ref.invalidate(readingPlanProvider),
+            ),
       data: (plan) {
         if (plan == null || !_prefsLoaded) {
           return const Scaffold(
               body: Center(child: CircularProgressIndicator()));
         }
 
-        if (_nameController.text.isEmpty) {
+        // Only seed the controllers from the loaded plan once — otherwise
+        // a rebuild triggered while the user is mid-edit (e.g. after
+        // clearing the field) would snap their in-progress text back.
+        if (!_profileControllersInitialized) {
           _nameController.text = plan.name;
-        }
-        if (_dayController.text.isEmpty) {
           _dayController.text = plan.currentDay.toString();
+          _profileControllersInitialized = true;
+        }
+        if (!_leaderboardControllersInitialized) {
+          _leaderboardOptIn = plan.leaderboardOptIn;
+          _displayNameController.text = plan.leaderboardDisplayName ?? '';
+          _leaderboardControllersInitialized = true;
         }
 
         final isGuest = ref.watch(guestModeProvider);
@@ -479,6 +545,138 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               const SizedBox(height: 16),
               _JustifyToggle(),
               const SizedBox(height: 32),
+
+              // Leaderboard
+              _SettingsSectionLabel('Leaderboard'),
+              const SizedBox(height: 12),
+              if (isGuest)
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.surfaceContainerLow,
+                    border: Border.all(
+                        color: Theme.of(context).colorScheme.outlineVariant),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.emoji_events_rounded,
+                          color: AppTheme.textSecondary, size: 20),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'Create a free account to join the leaderboard and '
+                          'track your streak.',
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodySmall
+                              ?.copyWith(color: AppTheme.textSecondary),
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              else
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.surfaceContainerLow,
+                    border: Border.all(
+                        color: Theme.of(context).colorScheme.outlineVariant),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('Show me on the leaderboard'),
+                        subtitle: Text(
+                          'Your display name and reading stats will be '
+                          'visible to other users.',
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodySmall
+                              ?.copyWith(color: AppTheme.textSecondary),
+                        ),
+                        value: _leaderboardOptIn,
+                        activeThumbColor: AppTheme.primary,
+                        onChanged: (v) =>
+                            setState(() => _leaderboardOptIn = v),
+                      ),
+                      if (_leaderboardOptIn) ...[
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: _displayNameController,
+                          maxLength: 24,
+                          decoration: const InputDecoration(
+                            labelText: 'Display Name',
+                            counterText: '',
+                          ),
+                        ),
+                      ],
+                      if (_leaderboardError != null) ...[
+                        const SizedBox(height: 8),
+                        Text(_leaderboardError!,
+                            style: const TextStyle(
+                                color: AppTheme.danger, fontSize: 13)),
+                      ],
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton(
+                          onPressed: _savingLeaderboard
+                              ? null
+                              : _saveLeaderboardSettings,
+                          child: _savingLeaderboard
+                              ? const SizedBox(
+                                  height: 18,
+                                  width: 18,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2),
+                                )
+                              : const Text('Save Leaderboard Settings'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              const SizedBox(height: 32),
+
+              // Community
+              _SettingsSectionLabel('Community'),
+              const SizedBox(height: 12),
+              _AppTile(
+                icon: Icons.volunteer_activism_rounded,
+                iconColor: const Color(0xFFEF4444),
+                title: 'Supporters',
+                subtitle: 'See who backs this app',
+                onTap: () => context.push('/supporters'),
+              ),
+              if (AppConstants.patreonUrl.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                _AppTile(
+                  icon: Icons.favorite_rounded,
+                  iconColor: const Color(0xFFF59E0B),
+                  title: 'Become a Supporter',
+                  subtitle: 'Support development on Patreon',
+                  onTap: () => launchUrl(
+                    Uri.parse(AppConstants.patreonUrl),
+                    mode: LaunchMode.externalApplication,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 12),
+              Center(
+                child: TextButton(
+                  onPressed: () => launchUrl(
+                    Uri.parse(AppConstants.policiesUrl),
+                    mode: LaunchMode.externalApplication,
+                  ),
+                  child: const Text('Privacy Policy & Terms'),
+                ),
+              ),
+              const SizedBox(height: 20),
 
               // Our Other Apps
               _SettingsSectionLabel('Our Other Apps'),
@@ -778,7 +976,7 @@ class _JustifyToggle extends ConsumerWidget {
           style: TextStyle(color: AppTheme.textSecondary),
         ),
         value: justify,
-        activeColor: AppTheme.primary,
+        activeThumbColor: AppTheme.primary,
         onChanged: (v) =>
             ref.read(appearanceProvider.notifier).setJustifyText(v),
       ),

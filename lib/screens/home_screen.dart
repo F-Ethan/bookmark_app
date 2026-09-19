@@ -1,9 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../core/theme/app_theme.dart';
 import '../core/utils/supabase_error.dart';
 import '../models/reading_plan.dart';
+import '../models/trending_highlight.dart';
 import '../models/verse_highlight.dart';
 import '../providers/reading_plan_provider.dart';
 import '../providers/verse_highlights_provider.dart';
@@ -26,7 +30,10 @@ class HomeScreen extends ConsumerWidget {
           const Scaffold(body: Center(child: CircularProgressIndicator())),
       error: (e, _) => isSupabasePaused(e)
           ? const SupabasePausedScreen()
-          : Scaffold(body: Center(child: Text('Error: $e'))),
+          : ErrorRetryView(
+              error: e,
+              onRetry: () => ref.invalidate(readingPlanProvider),
+            ),
       data: (plan) {
         if (plan == null) {
           return const Scaffold(
@@ -83,6 +90,14 @@ class HomeScreen extends ConsumerWidget {
               ),
               const SizedBox(height: 12),
               _NavTile(
+                icon: Icons.emoji_events_rounded,
+                title: 'Leaderboard',
+                subtitle: 'Streaks from readers who opted in',
+                iconColor: const Color(0xFFF59E0B),
+                onTap: () => context.push('/leaderboard'),
+              ),
+              const SizedBox(height: 12),
+              _NavTile(
                 icon: Icons.settings_rounded,
                 title: 'Settings',
                 subtitle: 'Notifications, name, reading day',
@@ -99,17 +114,112 @@ class HomeScreen extends ConsumerWidget {
 
 // ── Highlights section ─────────────────────────────────────────────────────────
 
-class _HighlightsSection extends ConsumerWidget {
+/// A single highlight-carousel slide — either the user's own saved verse, or
+/// an anonymized "N people also highlighted this" trending verse.
+class _HighlightItem {
+  final String book;
+  final int chapter;
+  final int verse;
+  final String verseText;
+  final VerseHighlight? own;
+  final int? trendingCount;
+
+  const _HighlightItem._({
+    required this.book,
+    required this.chapter,
+    required this.verse,
+    required this.verseText,
+    this.own,
+    this.trendingCount,
+  });
+
+  factory _HighlightItem.own(VerseHighlight h) => _HighlightItem._(
+        book: h.book,
+        chapter: h.chapter,
+        verse: h.verse,
+        verseText: h.verseText,
+        own: h,
+      );
+
+  factory _HighlightItem.trending(TrendingHighlight t) => _HighlightItem._(
+        book: t.book,
+        chapter: t.chapter,
+        verse: t.verse,
+        verseText: t.verseText,
+        trendingCount: t.highlightCount,
+      );
+
+  bool get isOwn => own != null;
+  String get reference => '$book $chapter:$verse';
+}
+
+class _HighlightsSection extends ConsumerStatefulWidget {
   const _HighlightsSection();
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final highlightsAsync = ref.watch(verseHighlightsProvider);
+  ConsumerState<_HighlightsSection> createState() => _HighlightsSectionState();
+}
 
-    return highlightsAsync.when(
+class _HighlightsSectionState extends ConsumerState<_HighlightsSection> {
+  final _pageController = PageController(viewportFraction: 0.88);
+  Timer? _autoplayTimer;
+  int _pageCount = 0;
+  int _currentPage = 0;
+
+  static const _autoplayInterval = Duration(seconds: 7);
+
+  void _syncAutoplay(int pageCount) {
+    if (pageCount == _pageCount) return;
+    _pageCount = pageCount;
+    _autoplayTimer?.cancel();
+    if (pageCount <= 1) return;
+    _autoplayTimer = Timer.periodic(_autoplayInterval, (_) {
+      if (!_pageController.hasClients || _pageCount <= 1) return;
+      final next = ((_pageController.page ?? 0).round() + 1) % _pageCount;
+      _pageController.animateToPage(
+        next,
+        duration: const Duration(milliseconds: 500),
+        curve: Curves.easeInOut,
+      );
+    });
+  }
+
+  void _pauseAutoplay() => _autoplayTimer?.cancel();
+
+  void _resumeAutoplay() {
+    final count = _pageCount;
+    _pageCount = -1; // force _syncAutoplay to actually restart the timer
+    _syncAutoplay(count);
+  }
+
+  @override
+  void dispose() {
+    _autoplayTimer?.cancel();
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ownAsync = ref.watch(verseHighlightsProvider);
+    final trending = ref.watch(trendingHighlightsProvider).valueOrNull ?? [];
+
+    return ownAsync.when(
       loading: () => const SizedBox.shrink(),
-      error: (_, __) => const SizedBox.shrink(),
-      data: (highlights) {
+      error: (_, _) => const SizedBox.shrink(),
+      data: (own) {
+        final ownRefs = own.map((h) => '${h.book} ${h.chapter}:${h.verse}').toSet();
+        final items = <_HighlightItem>[
+          ...own.map(_HighlightItem.own),
+          ...trending
+              .where((t) => !ownRefs.contains('${t.book} ${t.chapter}:${t.verse}'))
+              .map(_HighlightItem.trending),
+        ];
+
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _syncAutoplay(items.length);
+        });
+
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -119,7 +229,7 @@ class _HighlightsSection extends ConsumerWidget {
                     color: Color(0xFFEF4444), size: 16),
                 const SizedBox(width: 8),
                 Text(
-                  "Today's Highlights",
+                  'Highlights',
                   style: Theme.of(context).textTheme.titleSmall?.copyWith(
                         fontWeight: FontWeight.w600,
                         color: AppTheme.textSecondary,
@@ -129,19 +239,55 @@ class _HighlightsSection extends ConsumerWidget {
               ],
             ),
             const SizedBox(height: 12),
-            highlights.isEmpty
-                ? _EmptyHighlights()
-                : SizedBox(
-                    height: 148,
-                    child: ListView.separated(
-                      scrollDirection: Axis.horizontal,
-                      clipBehavior: Clip.none,
-                      itemCount: highlights.length,
-                      separatorBuilder: (_, __) => const SizedBox(width: 12),
-                      itemBuilder: (context, i) =>
-                          _HighlightCard(highlight: highlights[i]),
+            if (items.isEmpty)
+              const _EmptyHighlights()
+            else ...[
+              SizedBox(
+                height: 172,
+                child: NotificationListener<ScrollNotification>(
+                  onNotification: (notification) {
+                    if (notification is UserScrollNotification &&
+                        notification.direction != ScrollDirection.idle) {
+                      _pauseAutoplay();
+                    } else if (notification is ScrollEndNotification) {
+                      _resumeAutoplay();
+                    }
+                    return false;
+                  },
+                  child: PageView.builder(
+                    controller: _pageController,
+                    clipBehavior: Clip.none,
+                    itemCount: items.length,
+                    onPageChanged: (i) => setState(() => _currentPage = i),
+                    itemBuilder: (context, i) => Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      child: _HighlightCard(item: items[i]),
                     ),
                   ),
+                ),
+              ),
+              if (items.length > 1) ...[
+                const SizedBox(height: 10),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: List.generate(items.length, (i) {
+                    final isActive = i == _currentPage;
+                    return AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      margin: const EdgeInsets.symmetric(horizontal: 3),
+                      width: isActive ? 16 : 6,
+                      height: 6,
+                      decoration: BoxDecoration(
+                        color: isActive
+                            ? AppTheme.primary
+                            : Theme.of(context).colorScheme.outlineVariant,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                    );
+                  }),
+                ),
+              ],
+            ],
           ],
         );
       },
@@ -150,6 +296,8 @@ class _HighlightsSection extends ConsumerWidget {
 }
 
 class _EmptyHighlights extends StatelessWidget {
+  const _EmptyHighlights();
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -183,64 +331,114 @@ class _EmptyHighlights extends StatelessWidget {
 }
 
 class _HighlightCard extends ConsumerWidget {
-  final VerseHighlight highlight;
+  final _HighlightItem item;
 
-  const _HighlightCard({required this.highlight});
+  const _HighlightCard({required this.item});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final gradientColors = item.isOwn
+        ? [
+            AppTheme.primary.withValues(alpha: isDark ? 0.32 : 0.14),
+            AppTheme.primary.withValues(alpha: isDark ? 0.12 : 0.04),
+          ]
+        : [
+            const Color(0xFFF59E0B).withValues(alpha: isDark ? 0.28 : 0.12),
+            const Color(0xFFF59E0B).withValues(alpha: isDark ? 0.10 : 0.03),
+          ];
+    final accent = item.isOwn ? AppTheme.primary : const Color(0xFFF59E0B);
+
     return Container(
-      width: 240,
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
       decoration: BoxDecoration(
-        color: highlight.isOwn
-            ? AppTheme.primary.withValues(alpha: 0.06)
-            : Theme.of(context).colorScheme.surfaceContainerLow,
-        border: Border.all(
-          color: highlight.isOwn
-              ? AppTheme.primary.withValues(alpha: 0.25)
-              : Theme.of(context).colorScheme.outlineVariant,
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: gradientColors,
         ),
-        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: accent.withValues(alpha: 0.22)),
+        borderRadius: BorderRadius.circular(20),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Stack(
         children: [
-          Expanded(
-            child: Text(
-              highlight.verseText,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    height: 1.5,
-                    color: Theme.of(context).colorScheme.onSurface,
-                  ),
-              overflow: TextOverflow.fade,
-            ),
+          Positioned(
+            right: -6,
+            top: -10,
+            child: Icon(Icons.format_quote_rounded,
+                size: 44, color: accent.withValues(alpha: 0.16)),
           ),
-          const SizedBox(height: 10),
-          Row(
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
                 child: Text(
-                  highlight.reference,
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: AppTheme.primary,
-                        fontWeight: FontWeight.w600,
+                  item.verseText,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        height: 1.45,
+                        fontStyle: FontStyle.italic,
+                        color: Theme.of(context).colorScheme.onSurface,
                       ),
+                  overflow: TextOverflow.fade,
                 ),
               ),
-              if (highlight.isOwn)
-                GestureDetector(
-                  onTap: () => ref
-                      .read(verseHighlightsProvider.notifier)
-                      .toggle(
-                        book: highlight.book,
-                        chapter: highlight.chapter,
-                        verse: highlight.verse,
-                        verseText: highlight.verseText,
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      item.reference,
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                            color: accent,
+                            fontWeight: FontWeight.w700,
+                          ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  if (item.isOwn)
+                    GestureDetector(
+                      onTap: () => ref.read(verseHighlightsProvider.notifier).toggle(
+                            book: item.own!.book,
+                            chapter: item.own!.chapter,
+                            verse: item.own!.verse,
+                            verseText: item.own!.verseText,
+                          ),
+                      child: Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: accent.withValues(alpha: 0.14),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.favorite_rounded,
+                            size: 14, color: Color(0xFFEF4444)),
                       ),
-                  child: const Icon(Icons.favorite_rounded,
-                      size: 14, color: Color(0xFFEF4444)),
-                ),
+                    )
+                  else
+                    Container(
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: accent.withValues(alpha: 0.14),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.local_fire_department_rounded,
+                              size: 12, color: accent),
+                          const SizedBox(width: 3),
+                          Text(
+                            '${item.trendingCount}',
+                            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                                  color: accent,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
             ],
           ),
         ],
